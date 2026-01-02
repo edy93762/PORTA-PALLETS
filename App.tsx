@@ -416,7 +416,7 @@ const App: React.FC = () => {
         </main>
       </div>
 
-      {/* MODAL USUÁRIOS - SIMPLIFICADA SEM CARGO */}
+      {/* MODAL USUÁRIOS */}
       {isUsersMenuOpen && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl z-[6000] flex items-center justify-center p-6" onClick={() => setIsUsersMenuOpen(false)}>
           <div className="bg-white w-full max-w-md rounded-[3rem] p-8 shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -467,7 +467,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL GESTÃO DE ITEM - RESTAURADO CAMPO DE QUANTIDADE PADRÃO */}
+      {/* MODAL GESTÃO DE ITEM (BASE) */}
       {isMasterMenuOpen && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl z-[6000] flex items-center justify-center p-6" onClick={() => setIsMasterMenuOpen(false)}>
            <div className="bg-white w-full max-w-md rounded-[3rem] shadow-2xl p-8 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
@@ -476,10 +476,10 @@ const App: React.FC = () => {
                  <button onClick={() => setIsMasterMenuOpen(false)} className="p-2 bg-slate-100 rounded-xl"><X size={20}/></button>
               </header>
               <form onSubmit={handleSaveMaster} className="space-y-4">
-                 <input type="text" placeholder="CÓDIGO SKU" className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase text-xs" value={newMaster.productId} onChange={e => setNewMaster({...newMaster, productId: e.target.value.toUpperCase()})} />
-                 <input type="text" placeholder="DESCRIÇÃO" className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase text-xs" value={newMaster.productName} onChange={e => setNewMaster({...newMaster, productName: e.target.value.toUpperCase()})} />
+                 <input type="text" placeholder="CÓDIGO SKU / ID" className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase text-xs" value={newMaster.productId} onChange={e => setNewMaster({...newMaster, productId: e.target.value.toUpperCase()})} />
+                 <input type="text" placeholder="DESCRIÇÃO DO ITEM" className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase text-xs" value={newMaster.productName} onChange={e => setNewMaster({...newMaster, productName: e.target.value.toUpperCase()})} />
                  <input type="number" placeholder="QUANTIDADE PADRÃO" className="w-full p-4 bg-slate-50 rounded-xl font-black text-xs" value={newMaster.standardQuantity || ''} onChange={e => setNewMaster({...newMaster, standardQuantity: parseInt(e.target.value) || 0})} />
-                 <button type="submit" className="w-full bg-indigo-600 text-white p-4 rounded-xl font-black uppercase text-xs shadow-lg">Salvar Item</button>
+                 <button type="submit" className="w-full bg-indigo-600 text-white p-4 rounded-xl font-black uppercase text-xs shadow-lg">Salvar na Base</button>
               </form>
               <div className="mt-6 border-t pt-4 max-h-48 overflow-y-auto no-scrollbar space-y-2">
                  {masterProducts.map(m => (
@@ -635,7 +635,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL ENTRADA/DETALHES */}
+      {/* MODAL ENTRADA/DETALHES - BUSCA AUTOMÁTICA OTIMIZADA */}
       {selectedPosition && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[6000] flex items-center justify-center p-6" onClick={() => setSelectedPosition(null)}>
            <div className="bg-white rounded-[3rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
@@ -644,19 +644,57 @@ const App: React.FC = () => {
                 <button onClick={() => setSelectedPosition(null)} className="p-2 bg-white/10 rounded-xl"><X size={20}/></button>
              </header>
              <form onSubmit={handleSavePosition} className="p-6 space-y-4">
-                <input type="text" placeholder="ID SKU" className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase outline-none focus:ring-2 ring-indigo-300" value={selectedPosition.productId || ''} onChange={e => {
-                  const val = e.target.value.toUpperCase();
-                  const master = masterProducts.find(m => m.productId === val);
-                  if (master) setSelectedPosition({...selectedPosition, productId: val, productName: master.productName, quantity: master.standardQuantity});
-                  else setSelectedPosition({...selectedPosition, productId: val});
-                }} />
-                <input type="text" placeholder="NOME DO ITEM" className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase outline-none focus:ring-2 ring-indigo-300" value={selectedPosition.productName || ''} onChange={e => setSelectedPosition({...selectedPosition, productName: e.target.value.toUpperCase()})} />
+                <div className="relative">
+                  <input 
+                    list="master-items-list"
+                    type="text" 
+                    placeholder="ID SKU / ITEM" 
+                    className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase outline-none focus:ring-2 ring-indigo-300 pr-12" 
+                    value={selectedPosition.productId || ''} 
+                    onChange={e => {
+                      const val = e.target.value.toUpperCase();
+                      // Busca automática com trim para evitar falhas por espaços
+                      const master = masterProducts.find(m => m.productId.trim() === val.trim());
+                      
+                      setSelectedPosition(prev => {
+                        if (master) {
+                          showFeedback('success', 'Dados do item carregados!');
+                          return {
+                            ...prev, 
+                            productId: val, 
+                            productName: master.productName, 
+                            quantity: master.standardQuantity
+                          };
+                        }
+                        return {...prev, productId: val};
+                      });
+                    }} 
+                  />
+                  <datalist id="master-items-list">
+                    {masterProducts.map(m => (
+                      <option key={m.productId} value={m.productId}>{m.productName}</option>
+                    ))}
+                  </datalist>
+                  <div className="absolute right-4 top-4 text-slate-300">
+                    <SearchIcon size={20}/>
+                  </div>
+                </div>
+                
+                <input type="text" placeholder="NOME DO ITEM" className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase outline-none focus:ring-2 ring-indigo-300" value={selectedPosition.productName || ''} onChange={e => setSelectedPosition(prev => ({...prev, productName: e.target.value.toUpperCase()}))} />
+                
                 <div className="grid grid-cols-2 gap-3">
-                  <input type="number" placeholder="QUANTIDADE" className="w-full p-4 bg-slate-50 rounded-xl font-black outline-none focus:ring-2 ring-indigo-300" value={selectedPosition.quantity || ''} onChange={e => setSelectedPosition({...selectedPosition, quantity: parseInt(e.target.value) || 0})} />
-                  <select className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase text-[10px]" value={selectedPosition.slots || 1} onChange={e => setSelectedPosition({...selectedPosition, slots: parseInt(e.target.value)})}>
-                    <option value={1}>Vaga Única</option><option value={2}>Vaga Dupla</option>
+                  <input type="number" placeholder="QUANTIDADE" className="w-full p-4 bg-slate-50 rounded-xl font-black outline-none focus:ring-2 ring-indigo-300" value={selectedPosition.quantity || ''} onChange={e => setSelectedPosition(prev => ({...prev, quantity: parseInt(e.target.value) || 0}))} />
+                  <select className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase text-[10px]" value={selectedPosition.slots || 1} onChange={e => setSelectedPosition(prev => ({...prev, slots: parseInt(e.target.value)}))}>
+                    <option value={1}>Vaga Única</option>
+                    <option value={2}>Vaga Dupla</option>
                   </select>
                 </div>
+
+                <div className="bg-slate-50 p-4 rounded-xl border border-dashed border-slate-200">
+                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">Endereço de Armazenagem</p>
+                   <p className="text-xl font-black text-indigo-600 text-center">{selectedPosition.rack}{LEVEL_LABELS[selectedPosition.level-1]}{selectedPosition.position}</p>
+                </div>
+
                 <div className="flex gap-2 pt-2">
                   <button type="submit" className="flex-1 bg-indigo-600 text-white p-4 rounded-2xl font-black uppercase text-xs shadow-lg active:scale-95 transition-all">{isProcessingAction ? 'Salvando...' : 'Armazenar'}</button>
                   {selectedPosition.productId && (
