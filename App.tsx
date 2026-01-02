@@ -1,15 +1,14 @@
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Package, Warehouse, Search, LayoutGrid, QrCode, TrendingUp, Box, 
-  Save, Trash2, X, MapPin, ScanLine, Settings, 
-  Download, Upload, HardDrive, AlertCircle, CheckCircle2,
+  Save, X, MapPin, ScanLine, Settings, 
+  HardDrive, AlertCircle, CheckCircle2,
   Printer, FileDown, Check, ArrowRight, Loader2, LogOut, Minus, Activity, Cloud, Keyboard, Camera
 } from 'lucide-react';
 import { PalletPosition, RackId } from './types';
 import { QRCodeModal } from './components/QRCodeModal';
-import { generateCSV, parseCSV } from './services/sheetsService';
-import { initializeDatabase, fetchInventoryFromDB, saveItemToDB, deleteItemFromDB, clearDatabase } from './services/neonService';
+import { initializeDatabase, fetchInventoryFromDB, saveItemToDB, deleteItemFromDB } from './services/neonService';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
@@ -61,8 +60,6 @@ const App: React.FC = () => {
     startPos: 1,
     endPos: 66
   });
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const getLevelLetter = (lvlIndex: number) => LEVEL_LABELS[lvlIndex] || (lvlIndex + 1).toString();
 
@@ -238,73 +235,6 @@ const App: React.FC = () => {
     setTimeout(() => setFeedback(null), 3000);
   };
 
-  const handleExportData = () => {
-    const csvContent = generateCSV(inventory);
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `estoque_portapallets_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const text = event.target?.result as string;
-      const parsedData = parseCSV(text);
-      if (parsedData.length > 0) {
-        setInventory(parsedData);
-        
-        if (isDbConnected) {
-            setIsLoadingDb(true);
-            try {
-                // Bulk insert/update simulation
-                for (const item of parsedData) {
-                    await saveItemToDB(dbConnectionString, item);
-                }
-                showFeedback('success', 'Dados importados para o Neon!');
-            } catch (err) {
-                showFeedback('error', 'Erro ao salvar importação no Neon.');
-            } finally {
-                setIsLoadingDb(false);
-            }
-        } else {
-            localStorage.setItem('rackmaster-local-data', JSON.stringify(parsedData));
-            showFeedback('success', 'Dados importados localmente!');
-        }
-        setIsSettingsOpen(false);
-      } else {
-        showFeedback('error', 'CSV inválido.');
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleClearAllData = async () => {
-    if (!window.confirm("ATENÇÃO: Isso apagará TODOS os itens do estoque permanentemente do Banco de Dados.\n\nTem certeza absoluta?")) return;
-    
-    setIsLoadingDb(true);
-    try {
-        if (isDbConnected) {
-            await clearDatabase(dbConnectionString);
-        }
-        setInventory([]);
-        localStorage.removeItem('rackmaster-local-data');
-        showFeedback('success', 'Estoque resetado com sucesso!');
-        setIsSettingsOpen(false);
-    } catch (e) {
-        console.error(e);
-        showFeedback('error', 'Erro ao limpar banco de dados.');
-    } finally {
-        setIsLoadingDb(false);
-    }
-  }
-
   const handlePositionClick = (rack: RackId, levelIdx: number, pos: number) => {
     const existing = inventory.find(p => p.rack === rack && p.level === (levelIdx + 1) && p.position === pos);
     setSelectedPosition(existing || {
@@ -468,9 +398,7 @@ const App: React.FC = () => {
             <button onClick={() => setIsPrintMenuOpen(true)} className="flex items-center gap-3 p-3 text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all border border-indigo-100 font-bold">
               <Printer size={20} /> Baixar Etiquetas
             </button>
-            <button onClick={handleExportData} className="flex items-center gap-3 p-3 text-emerald-600 hover:bg-emerald-50 rounded-xl transition-all border border-emerald-100 mt-2 font-bold">
-              <Download size={20} /> Backup CSV
-            </button>
+            {/* Backup CSV Removed */}
             <button onClick={() => setIsSettingsOpen(true)} className="flex items-center gap-3 p-3 text-slate-500 hover:bg-slate-100 rounded-xl transition-all"><Settings size={20} /> Configurações</button>
           </nav>
         </aside>
@@ -887,26 +815,6 @@ const App: React.FC = () => {
                         </button>
                         <p className="text-[10px] text-slate-400 mt-2 text-center">Cole sua Connection String do Console do Neon aqui.</p>
                     </div>
-                  </div>
-
-                  <hr className="border-slate-100"/>
-
-                  <div className="space-y-3">
-                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Dados Locais</label>
-                     <button onClick={() => fileInputRef.current?.click()} className="w-full flex items-center justify-between p-6 bg-amber-50 text-amber-700 rounded-3xl border border-amber-100 font-black uppercase text-sm hover:bg-amber-100 transition-colors">
-                        Restaurar via CSV <Upload size={20} />
-                     </button>
-                     <input type="file" ref={fileInputRef} onChange={handleImportData} hidden accept=".csv" />
-                  </div>
-
-                  <div className="pt-6 border-t border-slate-100">
-                      <p className="text-xs font-bold text-rose-500 uppercase tracking-widest mb-3">Zona de Perigo</p>
-                      <button 
-                          onClick={handleClearAllData}
-                          className="w-full py-4 bg-rose-100 text-rose-700 rounded-2xl font-black uppercase text-sm border-2 border-rose-200 hover:bg-rose-200 hover:border-rose-300 transition-all flex items-center justify-center gap-2"
-                      >
-                          <Trash2 size={20} /> Resetar Todo o Estoque
-                      </button>
                   </div>
                 </div>
               </div>
