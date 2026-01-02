@@ -360,20 +360,10 @@ const App: React.FC = () => {
             </button>
             <button onClick={() => setIsSettingsOpen(true)} className="flex items-center gap-3 p-3 text-slate-500 hover:bg-slate-100 rounded-xl transition-all"><Settings size={20} /> Configurações</button>
           </nav>
-
-          <div className="mt-auto bg-slate-900 rounded-2xl p-5 text-white shadow-xl">
-            <div className="flex justify-between mb-2">
-              <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Ocupação</span>
-              <span className="text-xs font-bold text-indigo-400">{stats.occupancyRate}%</span>
-            </div>
-            <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-              <div className="bg-indigo-500 h-full transition-all duration-700" style={{ width: `${stats.occupancyRate}%` }}></div>
-            </div>
-          </div>
         </aside>
 
         <main className="flex-1 p-6 lg:p-10">
-          <header className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+          <header className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center justify-between">
               <div>
                 <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mb-1">Paletes Ativos</p>
@@ -387,6 +377,13 @@ const App: React.FC = () => {
                 <h2 className="text-4xl font-black">{stats.totalPositions - stats.occupiedPositions}</h2>
               </div>
               <LayoutGrid className="text-emerald-100 w-12 h-12" />
+            </div>
+            <div className="bg-indigo-600 text-white p-6 rounded-3xl shadow-lg shadow-indigo-200 flex items-center justify-between">
+              <div>
+                <p className="text-indigo-200 font-bold uppercase text-[10px] tracking-widest mb-1">Taxa de Ocupação</p>
+                <h2 className="text-4xl font-black">{stats.occupancyRate}%</h2>
+              </div>
+              <TrendingUp className="text-indigo-300 w-12 h-12" />
             </div>
           </header>
 
