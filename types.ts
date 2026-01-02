@@ -9,7 +9,14 @@ export interface PalletPosition {
   productId?: string;    // ID do Produto
   productName?: string;  // Descrição/Nome
   quantity?: number;
+  slots?: number;        // Quantidade de vagas ocupadas (1 ou 2)
   lastUpdated?: string;
+}
+
+export interface MasterProduct {
+  productId: string;
+  productName: string;
+  standardQuantity: number;
 }
 
 export interface InventoryStats {
