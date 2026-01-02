@@ -4,7 +4,7 @@ import {
   Package, Warehouse, Search, LayoutGrid, QrCode, TrendingUp, Box, 
   Save, X, MapPin, ScanLine, Settings, 
   HardDrive, AlertCircle, CheckCircle2,
-  Printer, FileDown, Check, ArrowRight, Loader2, LogOut, Minus, Activity, Cloud, Keyboard, Camera, ChevronRight, Hash, Layers, Plus, Lock, KeyRound, User
+  Printer, FileDown, Check, ArrowRight, Loader2, LogOut, Minus, Activity, Cloud, Keyboard, Camera, ChevronRight, Hash, Layers, Plus, Lock, KeyRound, User, Eye, EyeOff
 } from 'lucide-react';
 import { PalletPosition, RackId } from './types';
 import { QRCodeModal } from './components/QRCodeModal';
@@ -23,6 +23,8 @@ const POSITIONS_PER_LEVEL = 66;
 const APP_USERNAME = "almox";
 const APP_PASSWORD = "Shopee@2026";
 
+// CONFIGURAÇÃO DE SESSÃO (1 HORA EM MILISSEGUNDOS)
+const SESSION_DURATION_MS = 60 * 60 * 1000; 
 
 // STRING DE CONEXÃO FIXA DO NEON DB
 const FIXED_DB_STRING = "postgresql://neondb_owner:npg_JaZLTzrqMc09@ep-fragrant-cherry-ac95x95d-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require";
@@ -30,10 +32,24 @@ const FIXED_DB_STRING = "postgresql://neondb_owner:npg_JaZLTzrqMc09@ep-fragrant-
 const App: React.FC = () => {
   // --- ESTADOS DE AUTENTICAÇÃO ---
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
-    return sessionStorage.getItem('isLoggedIn') === 'true';
+    const loggedIn = localStorage.getItem('isLoggedIn') === 'true';
+    const loginTime = localStorage.getItem('loginTime');
+    
+    if (loggedIn && loginTime) {
+      const now = Date.now();
+      if (now - parseInt(loginTime) < SESSION_DURATION_MS) {
+        return true;
+      }
+    }
+    // Limpa se expirou ou não existe
+    localStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('loginTime');
+    return false;
   });
+
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState(false);
 
   // --- ESTADOS DO APP ---
@@ -78,6 +94,23 @@ const App: React.FC = () => {
 
   const getLevelLetter = (lvlIndex: number) => LEVEL_LABELS[lvlIndex] || (lvlIndex + 1).toString();
 
+  // Monitora expiração de sessão
+  useEffect(() => {
+    if (isLoggedIn) {
+      const checkInterval = setInterval(() => {
+        const loginTime = localStorage.getItem('loginTime');
+        if (loginTime) {
+          if (Date.now() - parseInt(loginTime) >= SESSION_DURATION_MS) {
+            handleLogout();
+            showFeedback('error', 'Sessão expirada. Entre novamente.');
+          }
+        }
+      }, 30000); // Checa a cada 30 segundos
+
+      return () => clearInterval(checkInterval);
+    }
+  }, [isLoggedIn]);
+
   useEffect(() => {
     if (isLoggedIn) {
       loadFromNeon(FIXED_DB_STRING);
@@ -87,8 +120,10 @@ const App: React.FC = () => {
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (loginUsername === APP_USERNAME && loginPassword === APP_PASSWORD) {
+      const now = Date.now().toString();
       setIsLoggedIn(true);
-      sessionStorage.setItem('isLoggedIn', 'true');
+      localStorage.setItem('isLoggedIn', 'true');
+      localStorage.setItem('loginTime', now);
       setLoginError(false);
     } else {
       setLoginError(true);
@@ -99,9 +134,11 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     setIsLoggedIn(false);
-    sessionStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('loginTime');
     setLoginUsername('');
     setLoginPassword('');
+    setShowPassword(false);
   };
 
   const loadFromNeon = async (str: string) => {
@@ -372,13 +409,20 @@ const App: React.FC = () => {
                 <label className="text-white/40 text-[10px] font-black uppercase tracking-[0.2em] ml-2">Senha</label>
                 <div className="relative group">
                   <input 
-                    type="password" 
+                    type={showPassword ? "text" : "password"} 
                     placeholder="DIGITE A SENHA..." 
-                    className={`w-full bg-white/5 border-2 ${loginError ? 'border-rose-500 bg-rose-500/10' : 'border-white/10 group-hover:border-indigo-500/50'} p-4 pl-12 rounded-2xl text-white font-black outline-none transition-all placeholder:text-white/20`}
+                    className={`w-full bg-white/5 border-2 ${loginError ? 'border-rose-500 bg-rose-500/10' : 'border-white/10 group-hover:border-indigo-500/50'} p-4 pl-12 pr-12 rounded-2xl text-white font-black outline-none transition-all placeholder:text-white/20`}
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
                   />
                   <Lock className={`absolute left-4 top-1/2 -translate-y-1/2 ${loginError ? 'text-rose-500' : 'text-white/20'} transition-colors`} size={18} />
+                  <button 
+                    type="button" 
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-white/20 hover:text-white transition-colors"
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
                 </div>
               </div>
             </div>
@@ -393,9 +437,11 @@ const App: React.FC = () => {
             {loginError && (
               <p className="text-rose-500 text-center font-black text-[10px] uppercase tracking-widest animate-pulse">Credenciais Incorretas</p>
             )}
+            
+            <p className="text-white/20 text-center font-bold text-[8px] uppercase tracking-[0.15em]">Sessão expira em 1 hora de uso</p>
           </form>
 
-          <p className="text-center mt-10 text-white/20 font-bold text-[9px] uppercase tracking-[0.2em]">Versão 2.4.0 • Enterprise Edition</p>
+          <p className="text-center mt-10 text-white/20 font-bold text-[9px] uppercase tracking-[0.2em]">Versão 2.4.5 • Enterprise Edition</p>
         </div>
       </div>
     );
