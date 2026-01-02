@@ -117,16 +117,3 @@ export const deleteItemFromDB = async (connectionString: string, item: PalletPos
     await pool.end();
   }
 };
-
-// Limpa TODO o banco de dados (Reset)
-export const clearDatabase = async (connectionString: string) => {
-  const pool = getPool(connectionString);
-  try {
-    await pool.query(`DELETE FROM ${TABLE_NAME}`);
-  } catch (err) {
-    console.error("Erro ao limpar banco:", err);
-    throw err;
-  } finally {
-    await pool.end();
-  }
-};
