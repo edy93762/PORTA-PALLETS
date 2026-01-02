@@ -19,6 +19,22 @@ export interface MasterProduct {
   standardQuantity: number;
 }
 
+export interface AppUser {
+  username: string;
+  password?: string;
+  role: 'admin' | 'operator';
+  createdAt?: string;
+}
+
+export interface ActivityLog {
+  id?: number;
+  username: string;
+  action: 'ENTRADA' | 'SAIDA' | 'CADASTRO' | 'EXCLUSAO';
+  details: string;
+  timestamp: string;
+  location?: string;
+}
+
 export interface InventoryStats {
   totalPositions: number;
   occupiedPositions: number;

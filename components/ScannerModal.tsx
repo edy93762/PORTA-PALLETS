@@ -18,19 +18,21 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
     let isMounted = true;
 
     const stopScanner = async () => {
-      if (scannerRef.current && scannerRef.current.isScanning) {
+      if (scannerRef.current) {
         try {
-          await scannerRef.current.stop();
+          if (scannerRef.current.isScanning) {
+            await scannerRef.current.stop();
+          }
           await scannerRef.current.clear();
         } catch (e) {
-          console.error("Erro ao parar scanner:", e);
+          console.warn("Aviso ao limpar scanner:", e);
         }
       }
     };
 
     const startScanner = async () => {
-      // Pequeno delay para garantir que o elemento DOM foi processado pelo React
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Pequeno delay para garantir montagem do DOM
+      await new Promise(resolve => setTimeout(resolve, 300));
       
       if (!isMounted) return;
       setIsInitializing(true);
@@ -38,21 +40,16 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
       
       try {
         const element = document.getElementById(containerId);
-        if (!element) {
-          throw new Error("Elemento de renderização do scanner não encontrado no DOM.");
-        }
+        if (!element) throw new Error("Elemento do scanner não encontrado.");
 
         if (!scannerRef.current) {
           scannerRef.current = new Html5Qrcode(containerId);
         }
 
         const config = { 
-          fps: 10, 
-          qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
-            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-            const size = Math.floor(minEdge * 0.7);
-            return { width: size, height: size };
-          }
+          fps: 15, 
+          qrbox: { width: 250, height: 250 },
+          aspectRatio: 1.0
         };
 
         const onScanSuccess = (decodedText: string) => {
@@ -62,65 +59,55 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
           }
         };
 
-        // TENTATIVA 1: Direto com environment
+        // ESTRATÉGIA: Primeiro tenta obter câmeras para validar permissão
         try {
-          await scannerRef.current.start(
-            { facingMode: "environment" }, 
-            config, 
-            onScanSuccess,
-            () => {} 
-          );
-          if (isMounted) setIsInitializing(false);
-          return;
-        } catch (err: any) {
-          console.warn("Tentativa 1 (facingMode: environment) falhou:", err);
-        }
-
-        // TENTATIVA 2: Listar câmeras e buscar por labels ou posição
-        const cameras = await Html5Qrcode.getCameras();
-        if (!cameras || cameras.length === 0) {
-          throw new Error("Nenhuma câmera encontrada no dispositivo.");
-        }
-
-        const sortedCameras = [...cameras].sort((a, b) => {
-          const labelA = a.label.toLowerCase();
-          const labelB = b.label.toLowerCase();
-          const isBackA = labelA.includes('back') || labelA.includes('traseira') || labelA.includes('rear');
-          const isBackB = labelB.includes('back') || labelB.includes('traseira') || labelB.includes('rear');
+          const devices = await Html5Qrcode.getCameras();
           
-          if (isBackA && !isBackB) return -1;
-          if (!isBackA && isBackB) return 1;
-          return 0; 
-        });
-
-        let started = false;
-        for (const camera of sortedCameras) {
-          try {
+          if (!devices || devices.length === 0) {
+            // Se não listar, tenta forçar via constraints (muitos navegadores mobile funcionam assim)
             await scannerRef.current.start(
-              camera.id,
+              { facingMode: "environment" }, 
+              config, 
+              onScanSuccess,
+              () => {} 
+            );
+          } else {
+            // Se listar, prioriza a traseira (back/traseira/rear)
+            const backCamera = devices.find(d => 
+              d.label.toLowerCase().includes('back') || 
+              d.label.toLowerCase().includes('traseira') || 
+              d.label.toLowerCase().includes('rear')
+            );
+            
+            const cameraId = backCamera ? backCamera.id : devices[devices.length - 1].id;
+            
+            await scannerRef.current.start(
+              cameraId,
               config,
               onScanSuccess,
               () => {}
             );
-            started = true;
-            break;
-          } catch (e) {
-            console.warn(`Falha ao iniciar câmera ID: ${camera.id}`, e);
           }
+          
+          if (isMounted) setIsInitializing(false);
+        } catch (innerErr: any) {
+          console.warn("Tentativa falhou, tentando fallback genérico...", innerErr);
+          // Fallback final: qualquer câmera disponível
+          await scannerRef.current.start(
+            { facingMode: "user" }, // Se não tem traseira, tenta frontal
+            config,
+            onScanSuccess,
+            () => {}
+          );
+          if (isMounted) setIsInitializing(false);
         }
-
-        if (!started) {
-          throw new Error("Não foi possível iniciar nenhuma das câmeras disponíveis.");
-        }
-
-        if (isMounted) setIsInitializing(false);
 
       } catch (err: any) {
         if (isMounted) {
-          console.error("Erro fatal ao iniciar scanner:", err);
-          let message = err.message || "Erro desconhecido ao acessar a câmera.";
-          if (message.includes("NotFoundError") || message.includes("Requested device not found")) {
-            message = "Câmera não encontrada. Certifique-se de que o dispositivo possui uma câmera traseira funcional e que o site tem permissão de acesso.";
+          console.error("Erro ao iniciar scanner:", err);
+          let message = "Câmera não disponível ou permissão negada.";
+          if (err.message?.includes("device not found")) {
+            message = "Câmera não encontrada. Verifique se o dispositivo possui câmera traseira e se o navegador tem permissão.";
           }
           setErrorMsg(message);
           setIsInitializing(false);
@@ -142,69 +129,58 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
         <header className="p-6 bg-indigo-600 text-white flex justify-between items-center">
           <div className="flex items-center gap-3">
             <Camera size={24} />
-            <h3 className="font-black uppercase italic tracking-tighter">Scanner de Etiqueta</h3>
+            <h3 className="font-black uppercase italic tracking-tighter leading-none">Scanner Ativo</h3>
           </div>
           <button onClick={onClose} className="p-2 bg-white/10 rounded-xl hover:bg-white/20 transition-all">
             <X size={24} />
           </button>
         </header>
 
-        <div className="p-8 flex flex-col items-center min-h-[350px] justify-center relative">
+        <div className="p-8 flex flex-col items-center min-h-[380px] justify-center relative bg-slate-50">
           {errorMsg ? (
             <div className="w-full p-8 bg-rose-50 border-2 border-rose-100 rounded-[2rem] flex flex-col items-center text-center gap-4">
               <AlertTriangle className="text-rose-500 w-12 h-12" />
               <div>
-                <h4 className="font-black text-rose-900 uppercase italic leading-none">Falha na Conexão</h4>
+                <h4 className="font-black text-rose-900 uppercase italic">Erro de Conexão</h4>
                 <p className="text-[11px] text-rose-600 font-bold uppercase mt-4 leading-relaxed">
                   {errorMsg}
                 </p>
               </div>
               <button 
                 onClick={() => window.location.reload()}
-                className="mt-2 bg-rose-600 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all flex items-center gap-2"
+                className="mt-2 bg-rose-600 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg flex items-center gap-2"
               >
-                <RefreshCw size={14}/> Tentar Novamente
+                <RefreshCw size={14}/> REINICIAR APP
               </button>
             </div>
           ) : (
             <>
-              <div className="relative w-full aspect-square bg-slate-100 rounded-[2rem] overflow-hidden border-4 border-slate-100 shadow-inner">
-                {/* O container DEVE estar sempre no DOM para que o Html5Qrcode funcione */}
+              <div className="relative w-full aspect-square bg-black rounded-[2rem] overflow-hidden border-4 border-white shadow-2xl">
                 <div id={containerId} className="w-full h-full"></div>
                 
-                {/* Overlay de carregamento */}
                 {isInitializing && (
-                  <div className="absolute inset-0 bg-slate-100 flex flex-col items-center justify-center gap-4 z-10">
-                    <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
-                    <p className="font-black text-slate-400 uppercase text-[10px] tracking-widest">Iniciando Câmera...</p>
+                  <div className="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center gap-4 z-10">
+                    <Loader2 className="w-10 h-10 animate-spin text-white opacity-50" />
+                    <p className="font-black text-white/40 uppercase text-[9px] tracking-widest">Acessando Hardware...</p>
                   </div>
                 )}
 
-                {/* Overlay de foco visual (apenas se não estiver carregando) */}
                 {!isInitializing && (
-                  <div className="absolute inset-0 border-[60px] border-black/40 pointer-events-none z-20">
-                    <div className="w-full h-full border-2 border-indigo-400 rounded-xl animate-pulse"></div>
+                  <div className="absolute inset-0 pointer-events-none z-20 flex items-center justify-center">
+                    <div className="w-48 h-48 border-2 border-indigo-500 rounded-3xl opacity-50 animate-pulse"></div>
                   </div>
                 )}
               </div>
               
               {!isInitializing && (
-                <div className="mt-8 text-center space-y-2">
-                  <p className="font-black text-slate-800 uppercase tracking-tight italic">Aponte para o QR Code</p>
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em]">Scanner Automático Ativo</p>
+                <div className="mt-8 text-center">
+                  <p className="font-black text-slate-800 uppercase tracking-tight italic">Enquadre o QR Code</p>
+                  <p className="text-[9px] text-slate-400 font-bold uppercase tracking-[0.2em] mt-1">Foco Automático Habilitado</p>
                 </div>
               )}
             </>
           )}
         </div>
-
-        {!errorMsg && !isInitializing && (
-          <footer className="p-6 bg-slate-50 border-t border-slate-100 flex justify-center">
-             <button onClick={() => window.location.reload()} className="flex items-center gap-2 text-indigo-600 font-black text-[10px] uppercase tracking-widest hover:bg-indigo-50 px-6 py-3 rounded-xl transition-all">
-               <RefreshCw size={14}/> Reiniciar Câmera
-             </button>
-          </footer>
-        )}
       </div>
     </div>
   );
