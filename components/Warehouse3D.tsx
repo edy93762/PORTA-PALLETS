@@ -30,7 +30,6 @@ const PalletBox = ({
   data: { rack: RackId, level: number, pos: number },
   onClick: () => void
 }) => {
-  // Cores dinâmicas para o highlight
   const baseColor = isHighlighted ? '#f59e0b' : (occupied ? '#4f46e5' : '#f1f5f9');
   const emissiveColor = isHighlighted ? '#f59e0b' : (occupied ? '#4f46e5' : '#000000');
   const emissiveInt = isHighlighted ? 1.5 : (occupied ? 0.2 : 0);
@@ -90,9 +89,11 @@ export const Warehouse3D: React.FC<Warehouse3DProps> = ({ inventory, onPositionC
 
   const inventoryMap = useMemo(() => {
     const map = new Map<string, PalletPosition>();
-    inventory.forEach(item => {
-      map.set(`${item.rack}-${item.level}-${item.position}`, item);
-    });
+    if (inventory) {
+      inventory.forEach(item => {
+        map.set(`${item.rack}-${item.level}-${item.position}`, item);
+      });
+    }
     return map;
   }, [inventory]);
 
@@ -176,7 +177,7 @@ export const Warehouse3D: React.FC<Warehouse3DProps> = ({ inventory, onPositionC
         {highlightProductId && (
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 bg-amber-500 rounded-sm animate-pulse"></div>
-            <span className="text-[10px] font-black uppercase tracking-widest text-amber-600">Highlight SKU</span>
+            <span className="text-[10px] font-black uppercase tracking-widest text-amber-600">Destaque SKU</span>
           </div>
         )}
         <div className="flex items-center gap-2">
