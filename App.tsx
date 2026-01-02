@@ -5,7 +5,8 @@ import {
   X, ScanLine, Printer, Check, ArrowRight, Loader2, LogOut, 
   ClipboardList, Trash2, Edit2, List, Link as LinkIcon, Menu,
   AlertCircle, CheckCircle2, User, Lock, Eye, EyeOff, Layers, SearchCode,
-  Save, Plus, Minus, Trash, Search as SearchIcon, ChevronRight, ChevronDown
+  Save, Plus, Minus, Trash, Search as SearchIcon, ChevronRight, ChevronDown,
+  Navigation
 } from 'lucide-react';
 import { PalletPosition, RackId, MasterProduct } from './types';
 import { QRCodeModal } from './components/QRCodeModal';
@@ -63,6 +64,8 @@ const App: React.FC = () => {
   const [scannedPosition, setScannedPosition] = useState<PalletPosition | null>(null);
   const [exitQuantity, setExitQuantity] = useState<number | string>(''); 
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isManualExitModalOpen, setIsManualExitModalOpen] = useState(false);
+  const [manualAddress, setManualAddress] = useState({ rack: 'A' as RackId, level: 1, pos: '' });
   
   const [showQR, setShowQR] = useState<{ rack: string; level: number; pos: number } | null>(null);
   const [isPrintMenuOpen, setIsPrintMenuOpen] = useState(false);
@@ -167,17 +170,32 @@ const App: React.FC = () => {
     const level = parseInt(parts[3]);
     const pos = parseInt(parts[5]);
 
+    findAndOpenExit(rack, level, pos);
+  };
+
+  const findAndOpenExit = (rack: RackId, level: number, pos: number) => {
     const item = inventory.find(p => p.rack === rack && p.level === level && p.position === pos);
     
     if (item && (item.productId || item.productName)) {
       setScannedPosition(item);
       setExitQuantity('');
       setIsScannerOpen(false);
+      setIsManualExitModalOpen(false);
       showFeedback('success', 'Local identificado!');
     } else {
       showFeedback('error', 'Nenhum produto neste local');
       setIsScannerOpen(false);
     }
+  };
+
+  const handleManualAddressSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const posNum = parseInt(manualAddress.pos);
+    if (!posNum || posNum < 1 || posNum > POSITIONS_PER_LEVEL) {
+      showFeedback('error', 'Posição inválida (1-66)');
+      return;
+    }
+    findAndOpenExit(manualAddress.rack, manualAddress.level, posNum);
   };
 
   const handleProductIdInput = (val: string) => {
@@ -400,8 +418,9 @@ const App: React.FC = () => {
         {/* ASIDE DESKTOP */}
         <aside className="hidden lg:flex w-80 bg-white border-r border-slate-200 p-8 flex-col gap-5 h-[calc(100vh-80px)]">
            <button onClick={() => setIsMasterMenuOpen(true)} className="flex items-center gap-4 p-5 text-slate-600 hover:bg-slate-50 rounded-3xl font-black uppercase text-xs tracking-widest border-2 border-transparent transition-all"><ClipboardList size={20}/> Cadastro SKU</button>
-           <button onClick={() => setIsScannerOpen(true)} className="flex items-center gap-4 p-5 text-slate-600 hover:bg-slate-50 rounded-3xl font-black uppercase text-xs tracking-widest border-2 border-transparent transition-all"><ScanLine size={20}/> Saída / Baixa</button>
-           <button onClick={() => setIsPrintMenuOpen(true)} className="flex items-center gap-4 p-5 text-indigo-600 bg-indigo-50 rounded-3xl font-black uppercase text-xs tracking-widest border-2 border-indigo-100 transition-all hover:bg-indigo-100 shadow-sm"><Printer size={20}/> Impressão Etiqueta</button>
+           <button onClick={() => setIsScannerOpen(true)} className="flex items-center gap-4 p-5 text-indigo-600 bg-indigo-50/50 rounded-3xl font-black uppercase text-xs tracking-widest border-2 border-indigo-100 transition-all hover:bg-indigo-100 shadow-sm"><ScanLine size={20}/> Saída Scanner</button>
+           <button onClick={() => setIsManualExitModalOpen(true)} className="flex items-center gap-4 p-5 text-rose-600 bg-rose-50/50 rounded-3xl font-black uppercase text-xs tracking-widest border-2 border-rose-100 transition-all hover:bg-rose-100 shadow-sm"><Navigation size={20}/> Saída Manual</button>
+           <button onClick={() => setIsPrintMenuOpen(true)} className="flex items-center gap-4 p-5 text-slate-600 hover:bg-slate-50 rounded-3xl font-black uppercase text-xs tracking-widest border-2 border-transparent transition-all hover:bg-slate-100"><Printer size={20}/> Impressão Etiqueta</button>
            <button onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')} className={`flex items-center gap-4 p-5 rounded-3xl font-black uppercase text-xs tracking-widest border-2 transition-all ${viewMode === 'list' ? 'bg-indigo-50 border-indigo-100 text-indigo-600 shadow-sm' : 'text-slate-500 border-transparent hover:bg-slate-50'}`}>
              {viewMode === 'grid' ? <List size={20}/> : <LayoutGrid size={20}/>}
              {viewMode === 'grid' ? 'Visualizar Lista' : 'Visualizar Grade'}
@@ -529,6 +548,46 @@ const App: React.FC = () => {
           </div>
         </main>
       </div>
+
+      {/* MODAL SAÍDA MANUAL (ENDEREÇO) */}
+      {isManualExitModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl z-[4200] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-md rounded-[4rem] shadow-2xl overflow-hidden animate-in zoom-in-95">
+             <header className="p-8 bg-rose-600 text-white flex justify-between items-center">
+                <div>
+                  <h3 className="font-black text-2xl uppercase italic tracking-tighter">Saída Manual</h3>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-80 mt-1">Digite o endereço do Pallet</p>
+                </div>
+                <button onClick={() => setIsManualExitModalOpen(false)} className="p-3 bg-white/10 rounded-2xl hover:bg-white/20"><X size={24}/></button>
+             </header>
+             <form onSubmit={handleManualAddressSubmit} className="p-10 space-y-8">
+                <div className="space-y-4">
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-6 tracking-widest">Selecione o Rack</label>
+                  <div className="grid grid-cols-4 gap-3">
+                    {RACKS.map(r => (
+                      <button type="button" key={r} onClick={() => setManualAddress({...manualAddress, rack: r})} className={`p-5 rounded-2xl font-black border-2 transition-all ${manualAddress.rack === r ? 'bg-rose-600 border-rose-600 text-white shadow-lg' : 'bg-slate-50 border-transparent text-slate-400'}`}>{r}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-6">
+                   <div className="space-y-4">
+                      <label className="text-[10px] font-black uppercase text-slate-400 ml-6 tracking-widest">Nível</label>
+                      <select className="w-full p-6 bg-slate-50 rounded-[2rem] font-black appearance-none outline-none border-2 border-transparent focus:border-rose-500" value={manualAddress.level} onChange={e => setManualAddress({...manualAddress, level: parseInt(e.target.value)})}>
+                         {LEVEL_LABELS.map((l, i) => <option key={l} value={i+1}>NÍVEL {l}</option>)}
+                      </select>
+                   </div>
+                   <div className="space-y-4">
+                      <label className="text-[10px] font-black uppercase text-slate-400 ml-6 tracking-widest">Posição (1-66)</label>
+                      <input type="number" placeholder="00" className="w-full p-6 bg-slate-50 rounded-[2rem] font-black outline-none border-2 border-transparent focus:border-rose-500" value={manualAddress.pos} onChange={e => setManualAddress({...manualAddress, pos: e.target.value})} />
+                   </div>
+                </div>
+                <button type="submit" className="w-full bg-rose-600 text-white p-8 rounded-[3rem] font-black text-xl uppercase tracking-widest shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-4">
+                  <Navigation size={24}/> IDENTIFICAR LOCAL
+                </button>
+             </form>
+          </div>
+        </div>
+      )}
 
       {/* MODAL IMPRESSÃO MASTER */}
       {isPrintMenuOpen && (
@@ -829,6 +888,19 @@ const App: React.FC = () => {
                     <span className="font-black uppercase italic tracking-tighter text-slate-700">Cadastro SKU</span>
                   </div>
                   <ChevronRight size={18} className="text-slate-300 group-active:text-indigo-400" />
+                </button>
+
+                <button 
+                  onClick={() => { setIsMobileMenuOpen(false); setIsManualExitModalOpen(true); }} 
+                  className="w-full group flex items-center justify-between p-5 rounded-[2rem] bg-slate-50 border border-transparent active:border-rose-100 active:bg-rose-50/50 transition-all"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="bg-rose-600 p-3.5 rounded-2xl shadow-lg shadow-rose-600/20 text-white">
+                      <Navigation size={22}/>
+                    </div>
+                    <span className="font-black uppercase italic tracking-tighter text-slate-700">Saída Manual</span>
+                  </div>
+                  <ChevronRight size={18} className="text-slate-300 group-active:text-rose-400" />
                 </button>
 
                 <button 
