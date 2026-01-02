@@ -13,7 +13,8 @@ import { Html5QrcodeScanner } from 'html5-qrcode';
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
 
-const RACKS: RackId[] = ['A', 'B', 'C', 'D'];
+// DEFINIÇÃO DOS RACKS: Apenas 3 (A, B, C)
+const RACKS: RackId[] = ['A', 'B', 'C'];
 const LEVEL_LABELS = ['A', 'B', 'C', 'D', 'E'];
 const POSITIONS_PER_LEVEL = 66;
 
@@ -719,7 +720,7 @@ const App: React.FC = () => {
                       className={`p-4 rounded-3xl border-2 text-left transition-all ${printFilter.rack === 'ALL' ? 'bg-indigo-50 border-indigo-500' : 'bg-slate-50 border-transparent hover:bg-slate-100'}`}
                     >
                       <span className="block font-black text-lg mb-1">TUDO</span>
-                      <span className="text-xs font-bold text-slate-400 uppercase">Todos os Porta Pallets (A-D)</span>
+                      <span className="text-xs font-bold text-slate-400 uppercase">Todos os Porta Pallets (A-C)</span>
                     </button>
                     <button 
                       onClick={() => {
