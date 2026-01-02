@@ -398,7 +398,6 @@ const App: React.FC = () => {
             <button onClick={() => setIsPrintMenuOpen(true)} className="flex items-center gap-3 p-3 text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all border border-indigo-100 font-bold">
               <Printer size={20} /> Baixar Etiquetas
             </button>
-            {/* Backup CSV Removed */}
             <button onClick={() => setIsSettingsOpen(true)} className="flex items-center gap-3 p-3 text-slate-500 hover:bg-slate-100 rounded-xl transition-all"><Settings size={20} /> Configurações</button>
           </nav>
         </aside>
