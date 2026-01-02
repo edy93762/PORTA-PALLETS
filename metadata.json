@@ -1,0 +1,7 @@
+{
+  "name": " - Gestão de Porta-Paletes",
+  "description": "Sistema avançado para gestão de estoque em porta-paletes com visualização 3D simulada, geração de QR Codes e assistente de IA para otimização de espaço.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
