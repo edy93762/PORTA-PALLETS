@@ -4,11 +4,12 @@ import {
   Package, Warehouse, Search, LayoutGrid, QrCode, Plus, TrendingUp, Box, 
   ChevronRight, Save, Trash2, X, MapPin, ScanLine, Settings, 
   Download, Upload, Info, FileText, Database, HardDrive, AlertCircle, CheckCircle2,
-  Calculator, ListFilter, Tags, Printer, FileDown, Check, ArrowRight, Loader2, FileInput, LogOut, Minus, Activity
+  Calculator, ListFilter, Tags, Printer, FileDown, Check, ArrowRight, Loader2, FileInput, LogOut, Minus, Activity, Cloud, CloudOff
 } from 'lucide-react';
 import { PalletPosition, RackId } from './types';
 import { QRCodeModal } from './components/QRCodeModal';
 import { generateCSV, parseCSV } from './services/sheetsService';
+import { initializeDatabase, fetchInventoryFromDB, saveItemToDB, deleteItemFromDB } from './services/neonService';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { QRCodeSVG } from 'qrcode.react';
 import { jsPDF } from "jspdf";
@@ -24,6 +25,11 @@ const App: React.FC = () => {
   const [activeLevelIndex, setActiveLevelIndex] = useState<number>(0); 
   const [selectedPosition, setSelectedPosition] = useState<PalletPosition | null>(null);
   
+  // Neon DB Config
+  const [dbConnectionString, setDbConnectionString] = useState('');
+  const [isDbConnected, setIsDbConnected] = useState(false);
+  const [isLoadingDb, setIsLoadingDb] = useState(false);
+
   // Estados para Scanner e Saída
   const [scannedPosition, setScannedPosition] = useState<PalletPosition | null>(null);
   const [exitQuantity, setExitQuantity] = useState<number | string>(''); 
@@ -33,8 +39,8 @@ const App: React.FC = () => {
   const [showQR, setShowQR] = useState<{ rack: string; level: number; pos: number } | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isPrintMenuOpen, setIsPrintMenuOpen] = useState(false);
-  const [isSearchOpen, setIsSearchOpen] = useState(false); // Novo estado para busca
-  const [searchQuery, setSearchQuery] = useState(''); // Texto da busca
+  const [isSearchOpen, setIsSearchOpen] = useState(false); 
+  const [searchQuery, setSearchQuery] = useState(''); 
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
   
@@ -56,16 +62,49 @@ const App: React.FC = () => {
 
   const getLevelLetter = (lvlIndex: number) => LEVEL_LABELS[lvlIndex] || (lvlIndex + 1).toString();
 
+  // Load Data (Local or DB)
   useEffect(() => {
-    const savedInv = localStorage.getItem('rackmaster-local-data');
-    if (savedInv) {
-      try {
-        setInventory(JSON.parse(savedInv));
-      } catch (e) {
-        console.error("Erro ao carregar dados locais");
+    const savedString = localStorage.getItem('rackmaster-neon-string');
+    if (savedString) {
+      setDbConnectionString(savedString);
+      loadFromNeon(savedString);
+    } else {
+      const savedInv = localStorage.getItem('rackmaster-local-data');
+      if (savedInv) {
+        try {
+          setInventory(JSON.parse(savedInv));
+        } catch (e) { console.error("Erro ao carregar dados locais"); }
       }
     }
   }, []);
+
+  const loadFromNeon = async (str: string) => {
+    setIsLoadingDb(true);
+    try {
+      // Tenta inicializar (criar tabela) caso seja a primeira vez
+      await initializeDatabase(str);
+      const data = await fetchInventoryFromDB(str);
+      setInventory(data);
+      setIsDbConnected(true);
+      showFeedback('success', 'Conectado ao Neon DB!');
+    } catch (error) {
+      console.error(error);
+      setIsDbConnected(false);
+      showFeedback('error', 'Falha ao conectar no Neon DB.');
+    } finally {
+      setIsLoadingDb(false);
+    }
+  };
+
+  const handleSaveDbConfig = async () => {
+    if (!dbConnectionString.trim()) {
+      localStorage.removeItem('rackmaster-neon-string');
+      setIsDbConnected(false);
+      return;
+    }
+    localStorage.setItem('rackmaster-neon-string', dbConnectionString);
+    await loadFromNeon(dbConnectionString);
+  };
 
   // Lógica do Scanner QR Code
   useEffect(() => {
@@ -138,7 +177,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleProcessExit = (e: React.FormEvent) => {
+  const handleProcessExit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!scannedPosition) return;
     
@@ -151,9 +190,10 @@ const App: React.FC = () => {
     }
 
     let newInv = inventory.filter(p => p.id !== scannedPosition.id);
+    let updatedItem: PalletPosition | null = null;
     
     if (qtdToRemove < currentQty) {
-      const updatedItem = {
+      updatedItem = {
         ...scannedPosition,
         quantity: currentQty - qtdToRemove,
         lastUpdated: new Date().toISOString()
@@ -164,18 +204,29 @@ const App: React.FC = () => {
       showFeedback('success', 'Item removido completamente. Posição liberada.');
     }
     
-    saveToLocal(newInv);
+    // Update State & Storage
+    setInventory(newInv);
+    
+    if (isDbConnected) {
+      try {
+        if (updatedItem) {
+          await saveItemToDB(dbConnectionString, updatedItem);
+        } else {
+          await deleteItemFromDB(dbConnectionString, scannedPosition.id);
+        }
+      } catch (err) {
+        showFeedback('error', 'Erro ao sincronizar saída com Neon.');
+      }
+    } else {
+      localStorage.setItem('rackmaster-local-data', JSON.stringify(newInv));
+    }
+    
     setScannedPosition(null);
   };
 
   const showFeedback = (type: 'success' | 'error', msg: string) => {
     setFeedback({ type, msg });
     setTimeout(() => setFeedback(null), 3000);
-  };
-
-  const saveToLocal = (data: PalletPosition[]) => {
-    setInventory(data);
-    localStorage.setItem('rackmaster-local-data', JSON.stringify(data));
   };
 
   const handleExportData = () => {
@@ -194,12 +245,29 @@ const App: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const text = event.target?.result as string;
       const parsedData = parseCSV(text);
       if (parsedData.length > 0) {
-        saveToLocal(parsedData);
-        showFeedback('success', 'Dados importados!');
+        setInventory(parsedData);
+        
+        if (isDbConnected) {
+            setIsLoadingDb(true);
+            try {
+                // Bulk insert/update simulation
+                for (const item of parsedData) {
+                    await saveItemToDB(dbConnectionString, item);
+                }
+                showFeedback('success', 'Dados importados para o Neon!');
+            } catch (err) {
+                showFeedback('error', 'Erro ao salvar importação no Neon.');
+            } finally {
+                setIsLoadingDb(false);
+            }
+        } else {
+            localStorage.setItem('rackmaster-local-data', JSON.stringify(parsedData));
+            showFeedback('success', 'Dados importados localmente!');
+        }
         setIsSettingsOpen(false);
       } else {
         showFeedback('error', 'CSV inválido.');
@@ -219,11 +287,10 @@ const App: React.FC = () => {
     });
   };
 
-  const handleSavePosition = (e: React.FormEvent) => {
+  const handleSavePosition = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPosition) return;
 
-    // --- VALIDAÇÃO DE CAMPOS OBRIGATÓRIOS ---
     if (!selectedPosition.productName?.trim()) {
       showFeedback('error', 'O NOME do item é OBRIGATÓRIO!');
       return;
@@ -237,12 +304,23 @@ const App: React.FC = () => {
       return;
     }
 
+    const itemToSave = { ...selectedPosition, lastUpdated: new Date().toISOString() };
     const newInv = inventory.filter(p => p.id !== selectedPosition.id);
-    // Salva apenas se passou na validação
-    newInv.push({ ...selectedPosition, lastUpdated: new Date().toISOString() });
+    newInv.push(itemToSave);
     
-    saveToLocal(newInv);
-    showFeedback('success', 'Entrada Salva com Sucesso!');
+    setInventory(newInv);
+    
+    if (isDbConnected) {
+      try {
+        await saveItemToDB(dbConnectionString, itemToSave);
+        showFeedback('success', 'Salvo no Neon DB!');
+      } catch (err) {
+        showFeedback('error', 'Erro ao salvar no Neon.');
+      }
+    } else {
+      localStorage.setItem('rackmaster-local-data', JSON.stringify(newInv));
+      showFeedback('success', 'Salvo Localmente!');
+    }
     setSelectedPosition(null);
   };
 
@@ -345,7 +423,13 @@ const App: React.FC = () => {
         <aside className="w-full lg:w-72 bg-white border-r border-slate-200 p-6 flex flex-col gap-8 h-auto lg:h-screen lg:sticky lg:top-0">
           <div className="flex items-center gap-3">
             <Warehouse className="text-indigo-600 w-8 h-8" />
-            <h1 className="text-xl font-bold tracking-tighter italic">Porta Pallets <span className="text-xs bg-slate-100 px-2 py-0.5 rounded not-italic">PRO</span></h1>
+            <div className="flex flex-col">
+                <h1 className="text-xl font-bold tracking-tighter italic">Porta Pallets <span className="text-xs bg-slate-100 px-2 py-0.5 rounded not-italic">PRO</span></h1>
+                {isDbConnected ? 
+                    <span className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold uppercase"><Cloud size={10} /> Conectado (Neon)</span> :
+                    <span className="flex items-center gap-1 text-[10px] text-amber-600 font-bold uppercase"><HardDrive size={10} /> Modo Local</span>
+                }
+            </div>
           </div>
           
           <nav className="flex flex-col gap-2">
@@ -388,6 +472,12 @@ const App: React.FC = () => {
           </header>
 
           <div className="bg-white p-6 lg:p-10 rounded-[2.5rem] shadow-sm border border-slate-100">
+             {isLoadingDb && (
+                 <div className="mb-4 bg-indigo-50 text-indigo-700 p-3 rounded-xl flex items-center gap-2 text-sm font-bold animate-pulse">
+                     <Loader2 className="animate-spin" size={16}/> Sincronizando com Neon DB...
+                 </div>
+             )}
+
             <div className="flex flex-wrap items-center justify-between gap-6 mb-8">
               <div className="flex gap-2 bg-slate-100 p-1.5 rounded-2xl">
                 {RACKS.map(r => (
@@ -484,8 +574,8 @@ const App: React.FC = () => {
                   </div>
 
                   <div className="flex gap-4 pt-4">
-                    <button type="submit" className="flex-[3] bg-indigo-600 hover:bg-indigo-700 text-white p-5 rounded-[1.5rem] font-black text-lg flex items-center justify-center gap-3 shadow-xl">
-                      <Save size={24}/> SALVAR
+                    <button type="submit" disabled={isLoadingDb} className="flex-[3] bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white p-5 rounded-[1.5rem] font-black text-lg flex items-center justify-center gap-3 shadow-xl">
+                      {isLoadingDb ? <Loader2 className="animate-spin" /> : <Save size={24}/>} SALVAR
                     </button>
                     <button type="button" onClick={() => setShowQR({ rack: selectedPosition.rack, level: selectedPosition.level, pos: selectedPosition.position })} className="bg-slate-100 hover:bg-slate-200 text-slate-600 p-5 rounded-[1.5rem]">
                       <QrCode size={24} />
@@ -496,7 +586,7 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* Modal: Consultar Estoque (Novo) */}
+          {/* Modal: Consultar Estoque */}
           {isSearchOpen && (
              <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
               <div className="bg-white rounded-[2.5rem] w-full max-w-lg h-[600px] flex flex-col overflow-hidden shadow-2xl animate-in zoom-in-95">
@@ -637,9 +727,10 @@ const App: React.FC = () => {
                   
                   <button 
                     type="submit"
-                    className="w-full bg-rose-600 hover:bg-rose-700 text-white p-6 rounded-[2rem] font-black text-xl shadow-xl shadow-rose-200 flex items-center justify-center gap-3 uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
+                    disabled={isLoadingDb}
+                    className="w-full bg-rose-600 hover:bg-rose-700 disabled:bg-rose-400 text-white p-6 rounded-[2rem] font-black text-xl shadow-xl shadow-rose-200 flex items-center justify-center gap-3 uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
                   >
-                    <LogOut /> CONFIRMAR SAÍDA
+                    {isLoadingDb ? <Loader2 className="animate-spin" /> : <LogOut />} CONFIRMAR SAÍDA
                   </button>
                 </form>
                </div>
@@ -740,14 +831,43 @@ const App: React.FC = () => {
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
               <div className="bg-white rounded-[2.5rem] w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95">
                 <div className="p-8 bg-slate-900 text-white flex justify-between items-center">
-                  <h3 className="font-black text-xl uppercase tracking-widest italic">Banco de Dados</h3>
+                  <h3 className="font-black text-xl uppercase tracking-widest italic">Configurações</h3>
                   <button onClick={() => setIsSettingsOpen(false)} className="p-2 hover:bg-white/10 rounded-xl"><X /></button>
                 </div>
-                <div className="p-8">
-                  <button onClick={() => fileInputRef.current?.click()} className="w-full flex items-center justify-between p-6 bg-amber-50 text-amber-700 rounded-3xl border border-amber-100 font-black uppercase text-sm">
-                    Restaurar via CSV <Upload size={20} />
-                  </button>
-                  <input type="file" ref={fileInputRef} onChange={handleImportData} hidden accept=".csv" />
+                <div className="p-8 space-y-6">
+                  
+                  {/* Neon DB Connection */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Conexão Neon DB (PostgreSQL)</label>
+                    <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100">
+                        <input 
+                            type="password"
+                            placeholder="postgres://user:pass@ep-xyz.neon.tech/neondb?sslmode=require"
+                            className="w-full bg-white p-3 rounded-xl border border-slate-200 text-sm font-mono text-slate-600 focus:border-indigo-500 outline-none mb-3"
+                            value={dbConnectionString}
+                            onChange={(e) => setDbConnectionString(e.target.value)}
+                        />
+                        <button 
+                            onClick={handleSaveDbConfig}
+                            disabled={isLoadingDb}
+                            className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 ${isDbConnected ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
+                        >
+                            {isLoadingDb ? <Loader2 className="animate-spin" size={16}/> : isDbConnected ? <Check size={16}/> : <Cloud size={16}/>}
+                            {isDbConnected ? "Conectado e Sincronizado" : "Salvar e Conectar"}
+                        </button>
+                        <p className="text-[10px] text-slate-400 mt-2 text-center">Cole sua Connection String do Console do Neon aqui.</p>
+                    </div>
+                  </div>
+
+                  <hr className="border-slate-100"/>
+
+                  <div className="space-y-3">
+                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Dados Locais</label>
+                     <button onClick={() => fileInputRef.current?.click()} className="w-full flex items-center justify-between p-6 bg-amber-50 text-amber-700 rounded-3xl border border-amber-100 font-black uppercase text-sm hover:bg-amber-100 transition-colors">
+                        Restaurar via CSV <Upload size={20} />
+                     </button>
+                     <input type="file" ref={fileInputRef} onChange={handleImportData} hidden accept=".csv" />
+                  </div>
                 </div>
               </div>
             </div>
