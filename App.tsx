@@ -314,7 +314,7 @@ const App: React.FC = () => {
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6">
-        <div className="w-full max-sm text-center">
+        <div className="w-full max-w-sm text-center">
           <Warehouse className="text-indigo-600 w-20 h-20 mx-auto mb-6" />
           <h1 className="text-3xl font-black text-white italic uppercase mb-8">ALMOX PRO</h1>
           <form onSubmit={handleLogin} className="bg-white/5 border border-white/10 p-8 rounded-[3rem] space-y-4">
