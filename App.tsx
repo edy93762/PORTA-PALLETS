@@ -1,17 +1,16 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
-  Package, Warehouse, Search, LayoutGrid, QrCode, Plus, TrendingUp, Box, 
-  ChevronRight, Save, Trash2, X, MapPin, ScanLine, Settings, 
-  Download, Upload, Info, FileText, Database, HardDrive, AlertCircle, CheckCircle2,
-  Calculator, ListFilter, Tags, Printer, FileDown, Check, ArrowRight, Loader2, FileInput, LogOut, Minus, Activity, Cloud, CloudOff
+  Package, Warehouse, Search, LayoutGrid, QrCode, TrendingUp, Box, 
+  Save, Trash2, X, MapPin, ScanLine, Settings, 
+  Download, Upload, HardDrive, AlertCircle, CheckCircle2,
+  Printer, FileDown, Check, ArrowRight, Loader2, LogOut, Minus, Activity, Cloud, Keyboard, Camera
 } from 'lucide-react';
 import { PalletPosition, RackId } from './types';
 import { QRCodeModal } from './components/QRCodeModal';
 import { generateCSV, parseCSV } from './services/sheetsService';
-import { initializeDatabase, fetchInventoryFromDB, saveItemToDB, deleteItemFromDB } from './services/neonService';
+import { initializeDatabase, fetchInventoryFromDB, saveItemToDB, deleteItemFromDB, clearDatabase } from './services/neonService';
 import { Html5QrcodeScanner } from 'html5-qrcode';
-import { QRCodeSVG } from 'qrcode.react';
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
 
@@ -19,14 +18,17 @@ const RACKS: RackId[] = ['A', 'B', 'C', 'D'];
 const LEVEL_LABELS = ['A', 'B', 'C', 'D', 'E'];
 const POSITIONS_PER_LEVEL = 66;
 
+// STRING DE CONEXÃO FIXA DO NEON DB
+const FIXED_DB_STRING = "postgresql://neondb_owner:npg_JaZLTzrqMc09@ep-fragrant-cherry-ac95x95d-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require";
+
 const App: React.FC = () => {
   const [inventory, setInventory] = useState<PalletPosition[]>([]);
   const [activeRack, setActiveRack] = useState<RackId>('A');
   const [activeLevelIndex, setActiveLevelIndex] = useState<number>(0); 
   const [selectedPosition, setSelectedPosition] = useState<PalletPosition | null>(null);
   
-  // Neon DB Config
-  const [dbConnectionString, setDbConnectionString] = useState('');
+  // Neon DB Config - Inicia com a string fixa
+  const [dbConnectionString, setDbConnectionString] = useState(FIXED_DB_STRING);
   const [isDbConnected, setIsDbConnected] = useState(false);
   const [isLoadingDb, setIsLoadingDb] = useState(false);
 
@@ -34,6 +36,8 @@ const App: React.FC = () => {
   const [scannedPosition, setScannedPosition] = useState<PalletPosition | null>(null);
   const [exitQuantity, setExitQuantity] = useState<number | string>(''); 
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isManualScannerMode, setIsManualScannerMode] = useState(false); // Alternar entre Câmera e Manual
+  const [manualEntryData, setManualEntryData] = useState({ rack: 'A' as RackId, level: 1, pos: 1 });
   
   // Estados para UI
   const [showQR, setShowQR] = useState<{ rack: string; level: number; pos: number } | null>(null);
@@ -62,20 +66,10 @@ const App: React.FC = () => {
 
   const getLevelLetter = (lvlIndex: number) => LEVEL_LABELS[lvlIndex] || (lvlIndex + 1).toString();
 
-  // Load Data (Local or DB)
+  // Load Data (Prioridade para Neon DB Fixo)
   useEffect(() => {
-    const savedString = localStorage.getItem('rackmaster-neon-string');
-    if (savedString) {
-      setDbConnectionString(savedString);
-      loadFromNeon(savedString);
-    } else {
-      const savedInv = localStorage.getItem('rackmaster-local-data');
-      if (savedInv) {
-        try {
-          setInventory(JSON.parse(savedInv));
-        } catch (e) { console.error("Erro ao carregar dados locais"); }
-      }
-    }
+    // Tenta conectar automaticamente ao carregar a página
+    loadFromNeon(FIXED_DB_STRING);
   }, []);
 
   const loadFromNeon = async (str: string) => {
@@ -86,29 +80,33 @@ const App: React.FC = () => {
       const data = await fetchInventoryFromDB(str);
       setInventory(data);
       setIsDbConnected(true);
-      showFeedback('success', 'Conectado ao Neon DB!');
+      showFeedback('success', 'Conectado ao Banco de Dados!');
     } catch (error) {
       console.error(error);
       setIsDbConnected(false);
-      showFeedback('error', 'Falha ao conectar no Neon DB.');
+      showFeedback('error', 'Erro na conexão com Banco.');
+      
+      // Fallback para dados locais se a conexão falhar
+      const savedInv = localStorage.getItem('rackmaster-local-data');
+      if (savedInv) {
+        try {
+          setInventory(JSON.parse(savedInv));
+          showFeedback('error', 'Usando dados offline temporariamente.');
+        } catch (e) { console.error("Erro ao carregar dados locais"); }
+      }
     } finally {
       setIsLoadingDb(false);
     }
   };
 
   const handleSaveDbConfig = async () => {
-    if (!dbConnectionString.trim()) {
-      localStorage.removeItem('rackmaster-neon-string');
-      setIsDbConnected(false);
-      return;
-    }
-    localStorage.setItem('rackmaster-neon-string', dbConnectionString);
+    // Mantido para permitir reconexão manual se necessário, mas usa a string do estado
     await loadFromNeon(dbConnectionString);
   };
 
   // Lógica do Scanner QR Code
   useEffect(() => {
-    if (isScannerOpen) {
+    if (isScannerOpen && !isManualScannerMode) {
       const scanner = new Html5QrcodeScanner(
         "reader",
         { fps: 10, qrbox: { width: 250, height: 250 } },
@@ -140,7 +138,7 @@ const App: React.FC = () => {
         scanner.clear().catch(console.error);
       };
     }
-  }, [isScannerOpen]);
+  }, [isScannerOpen, isManualScannerMode]);
 
   // Calcula o estoque total de um ID específico
   const getTotalStockById = (productId: string) => {
@@ -166,15 +164,25 @@ const App: React.FC = () => {
   }, [searchResults]);
 
   const handleScanSuccess = (rack: RackId, level: number, pos: number) => {
+    // Garante que o scanner feche
+    setIsScannerOpen(false);
+    setIsManualScannerMode(false);
+
     const existing = inventory.find(p => p.rack === rack && p.level === level && p.position === pos);
     
     if (existing) {
       setExitQuantity(''); 
       setScannedPosition(existing);
     } else {
+      // Se não existe, não dá pra dar saída, mas podemos abrir pra entrada ou avisar
       handlePositionClick(rack, level - 1, pos);
-      showFeedback('success', 'Posição livre! Cadastre a entrada.');
+      showFeedback('success', 'Posição livre identificada.');
     }
+  };
+
+  const handleManualScanSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      handleScanSuccess(manualEntryData.rack, manualEntryData.level, manualEntryData.pos);
   };
 
   const handleProcessExit = async (e: React.FormEvent) => {
@@ -212,7 +220,8 @@ const App: React.FC = () => {
         if (updatedItem) {
           await saveItemToDB(dbConnectionString, updatedItem);
         } else {
-          await deleteItemFromDB(dbConnectionString, scannedPosition.id);
+          // AQUI: Passamos o objeto completo scannedPosition para a exclusão robusta
+          await deleteItemFromDB(dbConnectionString, scannedPosition);
         }
       } catch (err) {
         showFeedback('error', 'Erro ao sincronizar saída com Neon.');
@@ -275,6 +284,26 @@ const App: React.FC = () => {
     };
     reader.readAsText(file);
   };
+
+  const handleClearAllData = async () => {
+    if (!window.confirm("ATENÇÃO: Isso apagará TODOS os itens do estoque permanentemente do Banco de Dados.\n\nTem certeza absoluta?")) return;
+    
+    setIsLoadingDb(true);
+    try {
+        if (isDbConnected) {
+            await clearDatabase(dbConnectionString);
+        }
+        setInventory([]);
+        localStorage.removeItem('rackmaster-local-data');
+        showFeedback('success', 'Estoque resetado com sucesso!');
+        setIsSettingsOpen(false);
+    } catch (e) {
+        console.error(e);
+        showFeedback('error', 'Erro ao limpar banco de dados.');
+    } finally {
+        setIsLoadingDb(false);
+    }
+  }
 
   const handlePositionClick = (rack: RackId, levelIdx: number, pos: number) => {
     const existing = inventory.find(p => p.rack === rack && p.level === (levelIdx + 1) && p.position === pos);
@@ -427,7 +456,7 @@ const App: React.FC = () => {
                 <h1 className="text-xl font-bold tracking-tighter italic">Porta Pallets <span className="text-xs bg-slate-100 px-2 py-0.5 rounded not-italic">PRO</span></h1>
                 {isDbConnected ? 
                     <span className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold uppercase"><Cloud size={10} /> Conectado (Neon)</span> :
-                    <span className="flex items-center gap-1 text-[10px] text-amber-600 font-bold uppercase"><HardDrive size={10} /> Modo Local</span>
+                    <span className="flex items-center gap-1 text-[10px] text-amber-600 font-bold uppercase"><HardDrive size={10} /> Conectando...</span>
                 }
             </div>
           </div>
@@ -435,7 +464,7 @@ const App: React.FC = () => {
           <nav className="flex flex-col gap-2">
             <button onClick={() => setIsSearchOpen(true)} className="flex items-center gap-3 p-3 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-100 hover:scale-105 transition-transform"><Search size={20} /> Consultar Item</button>
             <button className="flex items-center gap-3 p-3 text-slate-600 hover:bg-slate-100 rounded-xl transition-all font-medium"><LayoutGrid size={20} /> Mapa de Carga</button>
-            <button onClick={() => setIsScannerOpen(true)} className="flex items-center gap-3 p-3 text-slate-500 hover:bg-slate-100 rounded-xl transition-all"><ScanLine size={20} /> Escanear QR (Saída)</button>
+            <button onClick={() => { setIsScannerOpen(true); setIsManualScannerMode(false); }} className="flex items-center gap-3 p-3 text-slate-500 hover:bg-slate-100 rounded-xl transition-all"><ScanLine size={20} /> Escanear QR (Saída)</button>
             <button onClick={() => setIsPrintMenuOpen(true)} className="flex items-center gap-3 p-3 text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all border border-indigo-100 font-bold">
               <Printer size={20} /> Baixar Etiquetas
             </button>
@@ -450,7 +479,7 @@ const App: React.FC = () => {
           <header className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center justify-between">
               <div>
-                <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mb-1">Paletes Ativos</p>
+                <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mb-1">Pallets Ativos</p>
                 <h2 className="text-4xl font-black">{stats.occupiedPositions}</h2>
               </div>
               <Box className="text-indigo-100 w-12 h-12" />
@@ -486,7 +515,7 @@ const App: React.FC = () => {
                     onClick={() => setActiveRack(r)} 
                     className={`px-6 py-3 rounded-xl font-black transition-all ${activeRack === r ? 'bg-white text-indigo-600 shadow-md scale-105' : 'text-slate-400 hover:text-slate-600'}`}
                   >
-                    RACK {r}
+                    P. PALLET {r}
                   </button>
                 ))}
               </div>
@@ -574,9 +603,10 @@ const App: React.FC = () => {
                   </div>
 
                   <div className="flex gap-4 pt-4">
-                    <button type="submit" disabled={isLoadingDb} className="flex-[3] bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white p-5 rounded-[1.5rem] font-black text-lg flex items-center justify-center gap-3 shadow-xl">
+                    <button type="submit" disabled={isLoadingDb} className="flex-[2] bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white p-5 rounded-[1.5rem] font-black text-lg flex items-center justify-center gap-3 shadow-xl">
                       {isLoadingDb ? <Loader2 className="animate-spin" /> : <Save size={24}/>} SALVAR
                     </button>
+                    
                     <button type="button" onClick={() => setShowQR({ rack: selectedPosition.rack, level: selectedPosition.level, pos: selectedPosition.position })} className="bg-slate-100 hover:bg-slate-200 text-slate-600 p-5 rounded-[1.5rem]">
                       <QrCode size={24} />
                     </button>
@@ -654,7 +684,7 @@ const App: React.FC = () => {
                             </div>
                             <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
                                <MapPin size={12} />
-                               <span>RACK {item.rack} • NÍVEL {item.level} • POS {item.position}</span>
+                               <span>PP {item.rack} • NÍVEL {item.level} • POS {item.position}</span>
                             </div>
                           </div>
                           <div className="bg-indigo-50 text-indigo-700 px-4 py-2 rounded-xl font-black text-lg min-w-[4rem] text-center">
@@ -762,7 +792,7 @@ const App: React.FC = () => {
                       className={`p-4 rounded-3xl border-2 text-left transition-all ${printFilter.rack === 'ALL' ? 'bg-indigo-50 border-indigo-500' : 'bg-slate-50 border-transparent hover:bg-slate-100'}`}
                     >
                       <span className="block font-black text-lg mb-1">TUDO</span>
-                      <span className="text-xs font-bold text-slate-400 uppercase">Todos os Racks (A-D)</span>
+                      <span className="text-xs font-bold text-slate-400 uppercase">Todos os Porta Pallets (A-D)</span>
                     </button>
                     <button 
                       onClick={() => {
@@ -770,7 +800,7 @@ const App: React.FC = () => {
                       }}
                       className={`p-4 rounded-3xl border-2 text-left transition-all ${printFilter.rack === activeRack ? 'bg-indigo-50 border-indigo-500' : 'bg-slate-50 border-transparent hover:bg-slate-100'}`}
                     >
-                      <span className="block font-black text-lg mb-1">RACK {activeRack}</span>
+                      <span className="block font-black text-lg mb-1">P. PALLET {activeRack}</span>
                       <span className="text-xs font-bold text-slate-400 uppercase">Apenas Atual</span>
                     </button>
                   </div>
@@ -868,26 +898,110 @@ const App: React.FC = () => {
                      </button>
                      <input type="file" ref={fileInputRef} onChange={handleImportData} hidden accept=".csv" />
                   </div>
+
+                  <div className="pt-6 border-t border-slate-100">
+                      <p className="text-xs font-bold text-rose-500 uppercase tracking-widest mb-3">Zona de Perigo</p>
+                      <button 
+                          onClick={handleClearAllData}
+                          className="w-full py-4 bg-rose-100 text-rose-700 rounded-2xl font-black uppercase text-sm border-2 border-rose-200 hover:bg-rose-200 hover:border-rose-300 transition-all flex items-center justify-center gap-2"
+                      >
+                          <Trash2 size={20} /> Resetar Todo o Estoque
+                      </button>
+                  </div>
                 </div>
               </div>
             </div>
           )}
 
-          {/* QR Scanner */}
+          {/* QR Scanner & Manual Exit Modal */}
           {isScannerOpen && (
             <div className="fixed inset-0 bg-slate-900/98 backdrop-blur-2xl z-[300] flex flex-col items-center justify-center p-6">
-              <div className="w-full max-w-md bg-white rounded-[3rem] overflow-hidden shadow-2xl animate-in zoom-in-95 relative">
-                <div className="p-8 bg-slate-900 text-white flex justify-between items-center z-10 relative">
+              <div className="w-full max-w-md bg-white rounded-[3rem] overflow-hidden shadow-2xl animate-in zoom-in-95 relative flex flex-col h-[600px]">
+                
+                {/* Header do Modal */}
+                <div className="p-8 bg-slate-900 text-white flex justify-between items-center z-10 relative shrink-0">
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center"><ScanLine size={24} /></div>
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isManualScannerMode ? 'bg-indigo-500' : 'bg-emerald-500'}`}>
+                        {isManualScannerMode ? <Keyboard size={24} /> : <ScanLine size={24} />}
+                    </div>
                     <div>
                       <span className="font-black uppercase tracking-widest text-sm italic block">Modo Saída</span>
-                      <span className="text-[10px] text-slate-400">Aponte para o QR da Posição</span>
+                      <span className="text-[10px] text-slate-400">
+                          {isManualScannerMode ? 'Entrada Manual de Posição' : 'Aponte para o QR Code'}
+                      </span>
                     </div>
                   </div>
-                  <button onClick={() => setIsScannerOpen(false)} className="p-2 hover:bg-white/10 rounded-xl"><X /></button>
+                  <button onClick={() => {setIsScannerOpen(false); setIsManualScannerMode(false);}} className="p-2 hover:bg-white/10 rounded-xl"><X /></button>
                 </div>
-                <div id="reader" className="w-full h-80 bg-black rounded-b-[3rem] overflow-hidden relative"></div>
+
+                {/* Conteúdo: Câmera ou Formulário */}
+                <div className="flex-1 bg-black relative flex flex-col">
+                    {!isManualScannerMode ? (
+                         <div id="reader" className="w-full h-full bg-black"></div>
+                    ) : (
+                        <div className="w-full h-full bg-slate-50 p-8 flex flex-col justify-center">
+                            <form onSubmit={handleManualScanSubmit} className="space-y-6">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase">Selecione o Rack</label>
+                                    <div className="flex gap-2">
+                                        {RACKS.map(r => (
+                                            <button 
+                                                key={r}
+                                                type="button"
+                                                onClick={() => setManualEntryData({...manualEntryData, rack: r})}
+                                                className={`flex-1 py-4 rounded-xl font-black text-xl border-2 transition-all ${manualEntryData.rack === r ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg' : 'bg-white border-slate-200 text-slate-400'}`}
+                                            >
+                                                {r}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase">Nível (1-5)</label>
+                                        <select 
+                                            className="w-full p-4 rounded-xl border-2 border-slate-200 font-bold text-lg bg-white"
+                                            value={manualEntryData.level}
+                                            onChange={(e) => setManualEntryData({...manualEntryData, level: parseInt(e.target.value)})}
+                                        >
+                                            {LEVEL_LABELS.map((l, i) => <option key={l} value={i+1}>{l}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase">Posição (1-66)</label>
+                                        <input 
+                                            type="number" 
+                                            min="1" 
+                                            max="66"
+                                            className="w-full p-4 rounded-xl border-2 border-slate-200 font-bold text-lg bg-white"
+                                            value={manualEntryData.pos}
+                                            onChange={(e) => setManualEntryData({...manualEntryData, pos: parseInt(e.target.value)})}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="bg-indigo-50 p-4 rounded-xl flex items-center justify-center gap-2 text-indigo-700 font-black text-lg border-2 border-indigo-100 border-dashed">
+                                    <MapPin size={20}/>
+                                    PP {manualEntryData.rack} {getLevelLetter(manualEntryData.level-1)}{manualEntryData.pos}
+                                </div>
+
+                                <button type="submit" className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-2">
+                                    Buscar Posição <ArrowRight />
+                                </button>
+                            </form>
+                        </div>
+                    )}
+
+                    {/* Botão de Alternância no Rodapé */}
+                    <div className="p-4 bg-white border-t border-slate-100 flex justify-center">
+                        <button 
+                            onClick={() => setIsManualScannerMode(!isManualScannerMode)}
+                            className="text-indigo-600 font-bold text-sm flex items-center gap-2 bg-indigo-50 px-6 py-3 rounded-full hover:bg-indigo-100 transition-colors"
+                        >
+                            {isManualScannerMode ? <><Camera size={18}/> Usar Câmera</> : <><Keyboard size={18}/> Digitar Código Manualmente</>}
+                        </button>
+                    </div>
+                </div>
               </div>
             </div>
           )}

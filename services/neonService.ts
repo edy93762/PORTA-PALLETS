@@ -14,8 +14,7 @@ const getPool = (connectionString: string) => {
 export const initializeDatabase = async (connectionString: string) => {
   const pool = getPool(connectionString);
   try {
-    const client = await pool.connect();
-    await client.query(`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS ${TABLE_NAME} (
         id TEXT PRIMARY KEY,
         rack TEXT NOT NULL,
@@ -27,12 +26,12 @@ export const initializeDatabase = async (connectionString: string) => {
         last_updated TEXT
       );
     `);
-    client.release();
-    await pool.end();
     return true;
   } catch (err) {
     console.error("Erro ao inicializar DB:", err);
     throw err;
+  } finally {
+    await pool.end();
   }
 };
 
@@ -41,9 +40,7 @@ export const fetchInventoryFromDB = async (connectionString: string): Promise<Pa
   const pool = getPool(connectionString);
   try {
     const { rows } = await pool.query(`SELECT * FROM ${TABLE_NAME}`);
-    await pool.end();
     
-    // Mapear snake_case do banco para camelCase do TypeScript
     return rows.map((row: any) => ({
       id: row.id,
       rack: row.rack,
@@ -57,6 +54,8 @@ export const fetchInventoryFromDB = async (connectionString: string): Promise<Pa
   } catch (err) {
     console.error("Erro ao buscar inventário:", err);
     throw err;
+  } finally {
+    await pool.end();
   }
 };
 
@@ -75,7 +74,7 @@ export const saveItemToDB = async (connectionString: string, item: PalletPositio
         last_updated = EXCLUDED.last_updated;
     `;
     const values = [
-      item.id,
+      item.id.trim(),
       item.rack,
       item.level,
       item.position,
@@ -85,21 +84,49 @@ export const saveItemToDB = async (connectionString: string, item: PalletPositio
       item.lastUpdated
     ];
     await pool.query(query, values);
-    await pool.end();
   } catch (err) {
     console.error("Erro ao salvar item:", err);
     throw err;
+  } finally {
+    await pool.end();
   }
 };
 
-// Deleta um item (zera ou remove da tabela)
-export const deleteItemFromDB = async (connectionString: string, id: string) => {
+// Deleta um item de forma robusta (Por ID ou Coordenada)
+export const deleteItemFromDB = async (connectionString: string, item: PalletPosition) => {
   const pool = getPool(connectionString);
   try {
-    await pool.query(`DELETE FROM ${TABLE_NAME} WHERE id = $1`, [id]);
-    await pool.end();
+    // Modificado para apagar onde o ID bate OU as coordenadas batem.
+    // Isso resolve problemas onde o ID string pode ter sido gerado com formato diferente
+    const query = `
+      DELETE FROM ${TABLE_NAME} 
+      WHERE id = $1 
+      OR (rack = $2 AND level = $3 AND position = $4)
+    `;
+    const values = [
+      item.id.trim(), 
+      item.rack, 
+      item.level, 
+      item.position
+    ];
+    await pool.query(query, values);
   } catch (err) {
     console.error("Erro ao deletar item:", err);
     throw err;
+  } finally {
+    await pool.end();
+  }
+};
+
+// Limpa TODO o banco de dados (Reset)
+export const clearDatabase = async (connectionString: string) => {
+  const pool = getPool(connectionString);
+  try {
+    await pool.query(`DELETE FROM ${TABLE_NAME}`);
+  } catch (err) {
+    console.error("Erro ao limpar banco:", err);
+    throw err;
+  } finally {
+    await pool.end();
   }
 };
