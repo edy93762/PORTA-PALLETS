@@ -31,6 +31,7 @@ const LEVEL_LABELS = ['A', 'B', 'C', 'D', 'E'];
 const POSITIONS_PER_LEVEL = 66;
 const FIXED_DB_STRING = "postgresql://neondb_owner:npg_JaZLTzrqMc09@ep-fragrant-cherry-ac95x95d-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require";
 const SECRET_REGISTRATION_KEY = "Shopee@2026";
+const STORAGE_KEY = "almox_pro_user_session";
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
@@ -62,6 +63,18 @@ const App: React.FC = () => {
   const [masterSearchQuery, setMasterSearchQuery] = useState('');
   const [newMaster, setNewMaster] = useState<MasterProduct>({ productId: '', productName: '', standardQuantity: 0 });
   const [isPrintingBatch, setIsPrintingBatch] = useState(false);
+
+  // Recupera sessão ao carregar
+  useEffect(() => {
+    const savedUser = localStorage.getItem(STORAGE_KEY);
+    if (savedUser) {
+      try {
+        setCurrentUser(JSON.parse(savedUser));
+      } catch (e) {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
+  }, []);
 
   const loadInitialData = useCallback(async () => {
     try {
@@ -106,6 +119,7 @@ const App: React.FC = () => {
       const user = await loginUserDB(FIXED_DB_STRING, loginData.user, loginData.pass);
       if (user) {
         setCurrentUser(user);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
         showFeedback('success', `Bem-vindo, ${user.username}!`);
       } else {
         showFeedback('error', 'Login ou senha incorretos.');
@@ -115,6 +129,12 @@ const App: React.FC = () => {
     } finally {
       setIsLoggingIn(false);
     }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem(STORAGE_KEY);
+    setIsMobileMenuOpen(false);
   };
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -133,6 +153,7 @@ const App: React.FC = () => {
       await saveUserToDB(FIXED_DB_STRING, newUser);
       showFeedback('success', 'Usuário cadastrado! Já pode entrar.');
       setIsRegisterMode(false);
+      setLoginData({ user: '', pass: '', secret: '' });
     } catch (e) {
       showFeedback('error', 'Erro ao cadastrar usuário.');
     } finally {
@@ -283,7 +304,7 @@ const App: React.FC = () => {
            </form>
 
            <div className="mt-8 border-t border-white/10 pt-6 w-full text-center">
-              <button onClick={() => setIsRegisterMode(!isRegisterMode)} className="text-white/40 hover:text-indigo-400 text-[10px] font-black uppercase tracking-widest transition-colors flex items-center justify-center gap-2 mx-auto">
+              <button onClick={() => { setIsRegisterMode(!isRegisterMode); setLoginData({ user: '', pass: '', secret: '' }); }} className="text-white/40 hover:text-indigo-400 text-[10px] font-black uppercase tracking-widest transition-colors flex items-center justify-center gap-2 mx-auto">
                 {isRegisterMode ? <X size={14}/> : <ShieldCheck size={14}/>}
                 {isRegisterMode ? 'VOLTAR PARA LOGIN' : 'CADASTRAR NOVO ACESSO'}
               </button>
@@ -364,7 +385,7 @@ const App: React.FC = () => {
               <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">Operador</span>
               <span className="text-xs font-black text-indigo-600 uppercase">{currentUser.username}</span>
             </div>
-            <button onClick={() => setCurrentUser(null)} className="flex items-center gap-4 p-4 text-rose-500 font-black uppercase text-[11px] hover:bg-rose-50 rounded-2xl transition-all w-full"><LogOut size={20}/> SAIR</button>
+            <button onClick={handleLogout} className="flex items-center gap-4 p-4 text-rose-500 font-black uppercase text-[11px] hover:bg-rose-50 rounded-2xl transition-all w-full"><LogOut size={20}/> SAIR</button>
           </div>
         </div>
       </aside>
@@ -404,7 +425,7 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* MODAL ENTRADA (POPUP CENTRAL) */}
+      {/* MODAL ENTRADA */}
       {selectedPosition && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[9000] flex items-center justify-center p-6" onClick={() => setSelectedPosition(null)}>
            <div className="bg-white rounded-[3rem] w-full max-w-md p-10 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
@@ -449,7 +470,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* OUTROS MODAIS MANTIDOS (Master, Inventory, Scanner, etc) */}
       {isMasterMenuOpen && (
         <div className="fixed inset-0 bg-white lg:bg-slate-900/90 lg:backdrop-blur-md z-[8000] flex flex-col" onClick={() => setIsMasterMenuOpen(false)}>
           <div className="bg-white lg:rounded-[3rem] w-full lg:max-w-2xl lg:h-[85vh] flex flex-col overflow-hidden lg:m-auto shadow-2xl" onClick={e => e.stopPropagation()}>
