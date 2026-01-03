@@ -6,7 +6,7 @@ import {
   ClipboardList, Trash2, Menu, AlertCircle, CheckCircle2, User as UserIcon, 
   Save, Search as SearchIcon, Navigation, Users, History, Clock, TrendingUp, Plus,
   SearchCode, Info, ChevronRight, FileDown, Calendar, Focus, Eraser, ListChecks,
-  Filter, QrCode
+  Filter, QrCode, Barcode, StepForward
 } from 'lucide-react';
 import { PalletPosition, RackId, MasterProduct, AppUser, ActivityLog } from './types';
 import { QRCodeModal } from './components/QRCodeModal';
@@ -63,7 +63,12 @@ const App: React.FC = () => {
 
   const [selectedPosition, setSelectedPosition] = useState<PalletPosition | null>(null);
   const [scannedPosition, setScannedPosition] = useState<PalletPosition | null>(null);
+  
+  // Controle do Fluxo de Scanner
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerStep, setScannerStep] = useState<'IDLE' | 'SCAN_PRODUCT' | 'SCAN_LOCATION'>('IDLE');
+  const [tempProduct, setTempProduct] = useState<MasterProduct | null>(null);
+
   const [isMasterMenuOpen, setIsMasterMenuOpen] = useState(false);
   const [isPrintMenuOpen, setIsPrintMenuOpen] = useState(false);
   const [isReportsOpen, setIsReportsOpen] = useState(false);
@@ -136,8 +141,14 @@ const App: React.FC = () => {
     } else {
       setSelectedPosition({
         id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`, 
-        rack, level, position: pos, productId: '', productName: '', quantity: 0, slots: 1
+        rack, level, position: pos, 
+        productId: tempProduct?.productId || '', 
+        productName: tempProduct?.productName || '', 
+        quantity: tempProduct?.standardQuantity || 0, 
+        slots: 1
       });
+      // Limpa o produto temporário após o clique se ele existia
+      if (tempProduct) setTempProduct(null);
     }
   };
 
@@ -303,6 +314,80 @@ const App: React.FC = () => {
     );
   }, [aggregatedInventory, inventorySearch]);
 
+  const handleUniversalScan = (code: string) => {
+    const cleanedCode = code.trim().toUpperCase();
+
+    // 1. Se for um Endereço de Porta-Pallets (Início PP-)
+    if (cleanedCode.startsWith('PP-')) {
+      const parts = cleanedCode.split('-');
+      const rack = parts[1]; 
+      const pos = parseInt(parts[3]); 
+      const level = parseInt(parts[5]);
+      
+      const item = inventory.find(p => p.rack === rack && p.level === level && p.position === pos);
+      
+      // Se já temos um produto bipado no fluxo de entrada
+      if (scannerStep === 'SCAN_LOCATION' && tempProduct) {
+        if (item) {
+          showFeedback('error', 'Este endereço já está ocupado!');
+          return;
+        }
+        setSelectedPosition({
+          id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`,
+          rack, level, position: pos,
+          productId: tempProduct.productId,
+          productName: tempProduct.productName,
+          quantity: tempProduct.standardQuantity,
+          slots: 1
+        });
+        setTempProduct(null);
+        setScannerStep('IDLE');
+        setIsScannerOpen(false);
+        return;
+      }
+
+      // Scanner comum para abrir posição
+      if (item?.productId) { 
+        setScannedPosition(item); 
+        setIsScannerOpen(false); 
+      } else {
+        setSelectedPosition({
+          id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`, 
+          rack, level, position: pos, productId: '', productName: '', quantity: 0, slots: 1
+        });
+        setIsScannerOpen(false);
+      }
+      return;
+    }
+
+    // 2. Se for um SKU (Não começa com PP-)
+    const master = masterProducts.find(m => m.productId === cleanedCode);
+    if (master) {
+      if (scannerStep === 'SCAN_PRODUCT') {
+        setTempProduct(master);
+        setScannerStep('SCAN_LOCATION');
+        // Mantém o scanner aberto para bipar o local
+        showFeedback('success', `Produto: ${master.productName}. Agora bipe o local de destino.`);
+      } else {
+        // Scanner universal bipou um produto -> Abre opção de onde guardar
+        setTempProduct(master);
+        showFeedback('success', `Produto: ${master.productName}. Escolha o local no grid.`);
+        setIsScannerOpen(false);
+      }
+      return;
+    }
+
+    // 3. Verifica se é um ID direto já no estoque para Saída
+    const existingInStock = inventory.find(p => p.productId === cleanedCode || p.id === cleanedCode);
+    if (existingInStock) {
+      setScannedPosition(existingInStock);
+      setIsScannerOpen(false);
+      return;
+    }
+
+    showFeedback('error', 'Código não reconhecido na base!');
+  };
+
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6">
@@ -390,9 +475,38 @@ const App: React.FC = () => {
         </header>
 
         <main className="flex-1 p-6 lg:p-10 space-y-8 overflow-y-auto no-scrollbar relative">
-          <div className="max-w-md">
-            <button onClick={() => setIsScannerOpen(true)} className="w-full flex items-center justify-center gap-3 p-5 bg-indigo-600 text-white rounded-[2rem] font-black uppercase text-xs shadow-lg hover:scale-[1.02] transition-all"><ScanLine size={20}/> Scanner QR Code</button>
+          <div className="flex flex-col sm:flex-row gap-4 max-w-2xl">
+            <button 
+              onClick={() => { setScannerStep('IDLE'); setIsScannerOpen(true); }} 
+              className="flex-1 flex items-center justify-center gap-3 p-5 bg-indigo-600 text-white rounded-3xl font-black uppercase text-xs shadow-lg hover:scale-[1.02] transition-all"
+            >
+              <ScanLine size={20}/> Scanner Geral
+            </button>
+            <button 
+              onClick={() => { setScannerStep('SCAN_PRODUCT'); setIsScannerOpen(true); }} 
+              className="flex-1 flex items-center justify-center gap-3 p-5 bg-emerald-600 text-white rounded-3xl font-black uppercase text-xs shadow-lg hover:scale-[1.02] transition-all"
+            >
+              <Barcode size={20}/> Entrada por Scanner
+            </button>
           </div>
+
+          {tempProduct && (
+            <div className="bg-amber-50 border-2 border-amber-200 p-6 rounded-[2.5rem] flex flex-col sm:flex-row items-center justify-between gap-4 animate-in slide-in-from-top duration-500">
+               <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-amber-500 rounded-2xl flex items-center justify-center text-white shadow-md">
+                    <Package size={24}/>
+                  </div>
+                  <div>
+                    <h4 className="font-black text-amber-900 uppercase italic">Produto Selecionado</h4>
+                    <p className="text-xs font-bold text-amber-700 uppercase">{tempProduct.productId} - {tempProduct.productName}</p>
+                  </div>
+               </div>
+               <div className="flex items-center gap-3">
+                 <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest hidden sm:block">Clique em uma vaga verde</p>
+                 <button onClick={() => setTempProduct(null)} className="p-3 bg-amber-200 text-amber-800 rounded-xl hover:bg-amber-300 transition-colors font-black text-[10px] uppercase">Cancelar</button>
+               </div>
+            </div>
+          )}
 
           <div className="bg-white rounded-[3rem] p-8 border border-slate-200 shadow-sm relative">
             <div className="flex flex-wrap gap-4 mb-8 justify-between items-center">
@@ -408,13 +522,12 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* LEGENDA RÁPIDA */}
             <div className="flex gap-6 mb-6 px-2">
               <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-md bg-emerald-500 shadow-sm"></div><span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Livre</span></div>
               <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-md bg-rose-600 shadow-sm"></div><span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Ocupado</span></div>
+              {tempProduct && <div className="flex items-center gap-2 animate-pulse"><div className="w-4 h-4 rounded-md bg-amber-500 shadow-sm"></div><span className="text-[10px] font-black uppercase text-amber-600 tracking-wider">Destino Pronto</span></div>}
             </div>
 
-            {/* GRID PRINCIPAL: gap-x-0 para fundir os slots duplos */}
             <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-11 gap-x-0 gap-y-3">
               {Array.from({ length: POSITIONS_PER_LEVEL }).map((_, i) => {
                 const pos = i + 1;
@@ -426,7 +539,6 @@ const App: React.FC = () => {
                 const isOccupied = !!activeItem;
                 const isSecondSlot = !!blockedByLeft;
 
-                // Estilo para fusão visual agressiva
                 let roundingClass = "rounded-xl";
                 let borderClass = "border-2 border-white/20";
                 let marginClass = "mx-0.5"; 
@@ -441,6 +553,9 @@ const App: React.FC = () => {
                   marginClass = "mr-1 ml-0"; 
                 }
 
+                // Efeito de destaque se houver um produto "no gatilho"
+                const isSuggested = tempProduct && !isOccupied;
+
                 return (
                   <button 
                     key={pos} 
@@ -448,14 +563,14 @@ const App: React.FC = () => {
                     onMouseEnter={(e) => { if (activeItem) setHoveredInfo({ item: activeItem, x: e.clientX, y: e.clientY }); }}
                     onMouseMove={(e) => { if (activeItem) setHoveredInfo({ item: activeItem, x: e.clientX, y: e.clientY }); }}
                     onMouseLeave={() => setHoveredInfo(null)}
-                    className={`aspect-square flex flex-col items-center justify-center transition-all hover:scale-[1.03] active:scale-95 relative overflow-hidden text-white shadow-md ${roundingClass} ${borderClass} ${marginClass} ${isOccupied ? 'bg-rose-600' : 'bg-emerald-500'}`}
+                    className={`aspect-square flex flex-col items-center justify-center transition-all hover:scale-[1.03] active:scale-95 relative overflow-hidden text-white shadow-md ${roundingClass} ${borderClass} ${marginClass} 
+                      ${isOccupied ? 'bg-rose-600' : isSuggested ? 'bg-amber-500 ring-4 ring-amber-300 ring-inset shadow-[0_0_20px_rgba(245,158,11,0.5)]' : 'bg-emerald-500'}`}
                   >
                     <span className="text-[10px] font-black z-10 absolute top-1">{pos}</span>
                     
                     {isOccupied && !isSecondSlot && (
                       <div className="mt-2 flex flex-col items-center">
                         <Package size={22} strokeWidth={2.5} className="text-white drop-shadow-md" />
-                        {isFirstSlotOfDouble && <span className="text-[7px] font-black uppercase mt-1 bg-white/20 px-1 rounded">Double</span>}
                       </div>
                     )}
                     
@@ -463,6 +578,12 @@ const App: React.FC = () => {
                        <div className="absolute inset-0 bg-black/5 flex items-center justify-center">
                           <ArrowRight size={32} strokeWidth={4} className="text-white opacity-60 animate-pulse" />
                        </div>
+                    )}
+
+                    {isSuggested && (
+                      <div className="animate-bounce">
+                        <StepForward size={24} className="text-white"/>
+                      </div>
                     )}
                   </button>
                 );
@@ -472,7 +593,25 @@ const App: React.FC = () => {
         </main>
       </div>
 
-      {/* MODAIS (INV, SCANNER, BAIXA, ENTRADA, MASTER, PRINT, HISTORY, USERS, DRAWER) CONTINUAM IGUAIS... */}
+      {/* MODAL SCANNER UNIVERSAL */}
+      {isScannerOpen && (
+        <ScannerModal 
+          onScan={handleUniversalScan} 
+          onClose={() => { setIsScannerOpen(false); setScannerStep('IDLE'); }} 
+          customHeader={
+            scannerStep !== 'IDLE' ? (
+              <div className="bg-emerald-100 text-emerald-800 px-4 py-2 rounded-xl flex items-center gap-2">
+                <div className="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
+                <span className="text-[10px] font-black uppercase">
+                  {scannerStep === 'SCAN_PRODUCT' ? 'Passo 1: Bipe o Produto' : 'Passo 2: Bipe o Endereço'}
+                </span>
+              </div>
+            ) : null
+          }
+        />
+      )}
+
+      {/* MODAIS (INV, BAIXA, ENTRADA, MASTER, PRINT, HISTORY, USERS, DRAWER) */}
       {isInventoryReportOpen && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl z-[9000] flex items-center justify-center p-6" onClick={() => setIsInventoryReportOpen(false)}>
            <div className="bg-white w-full max-w-4xl rounded-[3rem] shadow-2xl p-8 h-[85vh] flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
@@ -505,23 +644,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* SCANNER MODAL */}
-      {isScannerOpen && (
-        <ScannerModal onScan={(code) => {
-          let item = null;
-          if (code.startsWith('PP-')) {
-            const parts = code.split('-');
-            const rack = parts[1]; const pos = parseInt(parts[3]); const level = parseInt(parts[5]);
-            item = inventory.find(p => p.rack === rack && p.level === level && p.position === pos);
-          } else {
-            item = inventory.find(p => p.id === code || p.id === code.replace(/-/g, ''));
-          }
-          if (item?.productId) { setScannedPosition(item); setIsScannerOpen(false); }
-          else if (item) { setSelectedPosition(item); setIsScannerOpen(false); showFeedback('error', 'Local Vazio! Abrindo para entrada.'); }
-          else { showFeedback('error', 'Local não identificado!'); setIsScannerOpen(false); }
-        }} onClose={() => setIsScannerOpen(false)} />
-      )}
-
       {/* EXIT MODAL */}
       {scannedPosition && (
         <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[8000] flex items-center justify-center p-6" onClick={() => setScannedPosition(null)}>
@@ -539,7 +661,6 @@ const App: React.FC = () => {
                <span className="text-[10px] font-black uppercase tracking-widest text-rose-700 block mb-1">LOCAL: {scannedPosition.rack} {scannedPosition.position} {LEVEL_LABELS[scannedPosition.level-1]}</span>
                <h4 className="text-lg font-black uppercase leading-tight mb-2">{scannedPosition.productName}</h4>
                <div className="inline-block px-4 py-1 bg-white rounded-full border border-rose-200"><p className="text-xs font-black text-rose-600 uppercase">Saldo: {scannedPosition.quantity} UN</p></div>
-               {scannedPosition.slots === 2 && <div className="mt-2 text-[8px] font-black text-rose-400 uppercase tracking-widest">Ocupa 2 Vagas</div>}
             </div>
             <div className="space-y-2 mb-6"><p className="text-[10px] font-black text-slate-400 uppercase text-center">Quantidade de Baixa</p><input type="number" autoFocus placeholder="0" className="w-full p-6 bg-slate-50 rounded-[2rem] font-black text-5xl text-center border-4 border-transparent focus:border-rose-500 outline-none shadow-inner" value={exitQuantity} onChange={e => setExitQuantity(e.target.value)} /></div>
             <button onClick={handleProcessExit} className="w-full bg-rose-600 text-white p-6 rounded-[2rem] font-black text-lg uppercase shadow-xl hover:bg-rose-700 active:scale-95 transition-all">Confirmar Saída</button>
