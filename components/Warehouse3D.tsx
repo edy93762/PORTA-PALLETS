@@ -21,28 +21,43 @@ const PalletBox = ({
   position, 
   occupied, 
   isHighlighted,
+  isDouble,
   data,
   onClick 
 }: { 
   position: [number, number, number], 
-  occupied: boolean,
+  occupied: boolean, 
   isHighlighted: boolean,
+  isDouble?: boolean,
   data: { rack: RackId, level: number, pos: number },
   onClick: () => void
 }) => {
-  const baseColor = isHighlighted ? '#f59e0b' : (occupied ? '#4f46e5' : '#f1f5f9');
-  const emissiveColor = isHighlighted ? '#f59e0b' : (occupied ? '#4f46e5' : '#000000');
-  const emissiveInt = isHighlighted ? 1.5 : (occupied ? 0.2 : 0);
+  const boxArgs = isDouble ? [2.15, 0.7, 1.1] : [0.95, 0.7, 1.1];
+  const boxPosition: [number, number, number] = isDouble 
+    ? [position[0] + 0.6, position[1], position[2]] 
+    : position;
+
+  const baseColor = isHighlighted 
+    ? '#f59e0b' 
+    : (occupied ? '#e11d48' : '#10b981');
+
+  const emissiveColor = isHighlighted 
+    ? '#f59e0b' 
+    : (occupied ? '#e11d48' : '#059669');
+
+  const emissiveInt = isHighlighted ? 1.5 : (occupied ? 0.3 : 0.1);
 
   return (
-    <mesh position={position} onClick={(e) => { e.stopPropagation(); onClick(); }}>
-      <boxGeometry args={[0.9, 0.7, 1.1]} />
+    <mesh position={boxPosition} onClick={(e) => { e.stopPropagation(); onClick(); }}>
+      <boxGeometry args={boxArgs} />
       <meshStandardMaterial 
         color={baseColor} 
         roughness={0.2} 
         metalness={0.3}
         emissive={emissiveColor}
         emissiveIntensity={emissiveInt}
+        transparent={!occupied}
+        opacity={occupied ? 1 : 0.3}
       />
     </mesh>
   );
@@ -100,25 +115,8 @@ export const Warehouse3D: React.FC<Warehouse3DProps> = ({ inventory, onPositionC
   return (
     <div className="w-full h-full bg-slate-100 rounded-[2rem] md:rounded-[3rem] overflow-hidden border border-slate-200 shadow-inner relative">
       <div className="absolute top-6 left-6 z-10 pointer-events-none">
-        <h3 className="text-xl font-black text-slate-800 italic tracking-tighter uppercase leading-none">Simulação 3D</h3>
-        {highlightProductId && (
-          <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest mt-1 animate-pulse">Destacando: {highlightProductId}</p>
-        )}
+        <h3 className="text-xl font-black text-slate-800 italic uppercase leading-none">Mapa 3D (A-D)</h3>
       </div>
-
-      {stats && (
-        <div className="absolute bottom-6 left-6 z-30 bg-slate-900/95 backdrop-blur-md p-5 rounded-[2.5rem] border border-white/10 shadow-2xl flex gap-6 pointer-events-auto scale-90 md:scale-100 origin-bottom-left">
-          <div className="text-center">
-            <p className="text-[9px] font-black text-indigo-300 uppercase tracking-widest mb-1">Ocupadas</p>
-            <p className="text-xl font-black text-white italic leading-none">{stats.occupied}</p>
-          </div>
-          <div className="w-px bg-white/10 h-8 self-center"></div>
-          <div className="text-center">
-            <p className="text-[9px] font-black text-emerald-300 uppercase tracking-widest mb-1">Livres</p>
-            <p className="text-xl font-black text-white italic leading-none">{stats.free}</p>
-          </div>
-        </div>
-      )}
 
       <Canvas shadows>
         <PerspectiveCamera makeDefault position={[50, 45, 100]} fov={45} />
@@ -126,7 +124,7 @@ export const Warehouse3D: React.FC<Warehouse3DProps> = ({ inventory, onPositionC
           enableDamping 
           dampingFactor={0.05} 
           minDistance={10} 
-          maxDistance={250}
+          maxDistance={300}
           target={[35, 5, 25]}
         />
         
@@ -139,52 +137,51 @@ export const Warehouse3D: React.FC<Warehouse3DProps> = ({ inventory, onPositionC
             return (
               <group key={rackId}>
                 <RackStructure rackId={rackId} offset={[0, 0, zOffset]} />
-                {Array.from({ length: levels }).map((_, lIdx) => (
-                  Array.from({ length: positionsPerLevel }).map((_, pIdx) => {
+                {Array.from({ length: levels }).map((_, lIdx) => {
+                  let skipNext = false;
+                  return Array.from({ length: positionsPerLevel }).map((_, pIdx) => {
+                    if (skipNext) {
+                      skipNext = false;
+                      return null;
+                    }
+
                     const level = lIdx + 1;
                     const pos = pIdx + 1;
                     const key = `${rackId}-${level}-${pos}`;
+                    
                     const item = inventoryMap.get(key);
+                    const isDouble = item?.slots === 2;
+                    if (isDouble) skipNext = true;
+
+                    const isOccupied = !!item;
                     const isHighlighted = !!(item && highlightProductId && item.productId === highlightProductId);
                     
                     return (
                       <PalletBox 
                         key={key}
                         position={[pIdx * 1.1, lIdx * 1.2 + 0.35, zOffset]}
-                        occupied={!!item}
+                        occupied={isOccupied}
                         isHighlighted={isHighlighted}
+                        isDouble={isDouble}
                         data={{ rack: rackId, level, pos }}
                         onClick={() => onPositionClick?.(rackId, level, pos)}
                       />
                     );
-                  })
-                ))}
+                  });
+                })}
               </group>
             );
           })}
         </group>
 
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[35, -0.5, 25]} receiveShadow>
-          <planeGeometry args={[350, 350]} />
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[35, -0.5, 30]} receiveShadow>
+          <planeGeometry args={[400, 400]} />
           <meshStandardMaterial color="#f1f5f9" />
         </mesh>
         
-        <ContactShadows position={[35, -0.49, 25]} opacity={0.4} scale={300} blur={2.5} far={20} />
+        <ContactShadows position={[35, -0.49, 30]} opacity={0.4} scale={400} blur={2.5} far={20} />
         <Environment preset="warehouse" />
       </Canvas>
-
-      <div className="absolute bottom-6 right-6 z-30 bg-white/90 backdrop-blur-md p-4 rounded-2xl border border-slate-200 shadow-xl flex flex-col gap-2 pointer-events-none">
-        {highlightProductId && (
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-amber-500 rounded-sm animate-pulse"></div>
-            <span className="text-[10px] font-black uppercase tracking-widest text-amber-600">Destaque SKU</span>
-          </div>
-        )}
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-indigo-600 rounded-sm"></div>
-          <span className="text-[10px] font-black uppercase text-slate-700">Ocupado</span>
-        </div>
-      </div>
     </div>
   );
 };
