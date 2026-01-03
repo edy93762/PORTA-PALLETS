@@ -255,13 +255,18 @@ const App: React.FC = () => {
   };
 
   const handlePositionClick = (rack: RackId, level: number, pos: number) => {
+    // Busca SEMPRE no estado de inventário mais recente
     const occ = inventory.find(p => p.rack === rack && p.level === level && p.position === pos);
     const isTail = inventory.find(p => p.rack === rack && p.level === level && p.position === (pos - 1) && p.slots === 2);
     const target = occ || isTail;
+    
     if (target) { 
-      setPalletDetails(target); 
+      // Se tiver item: Abre Detalhes/Saída
+      setPalletDetails({ ...target }); 
+      setSelectedPosition(null);
     } 
     else { 
+      // Se estiver vazio: Abre Entrada
       setSelectedPosition({ 
         id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`, 
         rack, 
@@ -272,6 +277,7 @@ const App: React.FC = () => {
         quantity: 0, 
         slots: 1 
       }); 
+      setPalletDetails(null);
     }
   };
 
@@ -709,7 +715,10 @@ const App: React.FC = () => {
         const match = text.match(regex);
         if (match) { 
           setIsScannerOpen(false); 
+          // Chama a função central de clique para decidir entre entrada ou saída baseado no inventário ATUAL
           handlePositionClick(match[1], parseInt(match[3]), parseInt(match[2])); 
+        } else {
+          showFeedback('error', 'Código QR não reconhecido como endereço válido.');
         }
       }} onClose={() => setIsScannerOpen(false)} />}
       
