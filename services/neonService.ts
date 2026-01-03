@@ -1,6 +1,6 @@
 
 import { Pool } from '@neondatabase/serverless';
-import { PalletPosition, MasterProduct, AppUser, ActivityLog } from "../types";
+import { PalletPosition, MasterProduct, AppUser, ActivityLog, RackId } from "../types";
 
 const TABLE_NAME = 'inventory_positions';
 const MASTER_TABLE = 'master_products';
@@ -14,7 +14,6 @@ const getPool = (connectionString: string) => {
 export const initializeDatabase = async (connectionString: string) => {
   const pool = getPool(connectionString);
   try {
-    // Tabela de estoque principal
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ${TABLE_NAME} (
         id TEXT PRIMARY KEY,
@@ -29,14 +28,7 @@ export const initializeDatabase = async (connectionString: string) => {
       );
     `);
 
-    // Migração de Segurança: Garante que a coluna 'slots' exista em ambientes já criados
-    try {
-      await pool.query(`ALTER TABLE ${TABLE_NAME} ADD COLUMN IF NOT EXISTS slots INTEGER DEFAULT 1;`);
-    } catch (e) {
-      // Ignora se a coluna já existir
-    }
-
-    // Tabela de cadastro mestre de SKUs
+    // Tabela master_products com nomes exatos da imagem (product_id, product_name, standard_quantity)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ${MASTER_TABLE} (
         product_id TEXT PRIMARY KEY,
@@ -45,7 +37,6 @@ export const initializeDatabase = async (connectionString: string) => {
       );
     `);
 
-    // Tabela de usuários e acesso
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ${USERS_TABLE} (
         username TEXT PRIMARY KEY,
@@ -55,14 +46,6 @@ export const initializeDatabase = async (connectionString: string) => {
       );
     `);
 
-    // Inserir usuário mestre padrão (almox / Shopee@2026)
-    await pool.query(`
-      INSERT INTO ${USERS_TABLE} (username, password, role, created_at)
-      VALUES ('almox', 'Shopee@2026', 'admin', $1)
-      ON CONFLICT DO NOTHING;
-    `, [new Date().toISOString()]);
-
-    // Tabela de histórico de ações (Logs)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ${LOGS_TABLE} (
         id SERIAL PRIMARY KEY,
@@ -76,19 +59,29 @@ export const initializeDatabase = async (connectionString: string) => {
 
     return true;
   } catch (err) {
-    console.error("Erro crítico na inicialização do Banco de Dados:", err);
+    console.error("Erro ao inicializar DB:", err);
     throw err;
   } finally {
     await pool.end();
   }
 };
 
-// --- FUNÇÕES DE USUÁRIO ---
-export const fetchUsersFromDB = async (connectionString: string): Promise<AppUser[]> => {
+export const cleanupOldLogs = async (connectionString: string) => {
   const pool = getPool(connectionString);
   try {
-    const { rows } = await pool.query(`SELECT username, role, created_at FROM ${USERS_TABLE} ORDER BY username ASC`);
-    return rows.map(r => ({ username: r.username, role: r.role, createdAt: r.created_at }));
+    await pool.query(`DELETE FROM ${LOGS_TABLE} WHERE CAST(timestamp AS TIMESTAMP) < (CURRENT_TIMESTAMP - INTERVAL '30 days')`);
+  } catch (err) {
+    console.warn("Falha ao limpar logs:", err);
+  } finally {
+    await pool.end();
+  }
+};
+
+export const loginUserDB = async (connectionString: string, user: string, pass: string): Promise<AppUser | null> => {
+  const pool = getPool(connectionString);
+  try {
+    const { rows } = await pool.query(`SELECT * FROM ${USERS_TABLE} WHERE username = $1 AND password = $2`, [user.trim().toLowerCase(), pass]);
+    return rows.length > 0 ? rows[0] : null;
   } finally {
     await pool.end();
   }
@@ -100,24 +93,13 @@ export const saveUserToDB = async (connectionString: string, user: AppUser) => {
     await pool.query(`
       INSERT INTO ${USERS_TABLE} (username, password, role, created_at)
       VALUES ($1, $2, $3, $4)
-      ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password, role = EXCLUDED.role;
-    `, [user.username, user.password, user.role, new Date().toISOString()]);
+      ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password;
+    `, [user.username.trim().toLowerCase(), user.password, user.role, new Date().toISOString()]);
   } finally {
     await pool.end();
   }
 };
 
-export const loginUserDB = async (connectionString: string, user: string, pass: string): Promise<AppUser | null> => {
-  const pool = getPool(connectionString);
-  try {
-    const { rows } = await pool.query(`SELECT * FROM ${USERS_TABLE} WHERE username = $1 AND password = $2`, [user, pass]);
-    return rows.length > 0 ? rows[0] : null;
-  } finally {
-    await pool.end();
-  }
-};
-
-// --- FUNÇÕES DE LOG ---
 export const saveLogToDB = async (connectionString: string, log: ActivityLog) => {
   const pool = getPool(connectionString);
   try {
@@ -133,34 +115,26 @@ export const saveLogToDB = async (connectionString: string, log: ActivityLog) =>
 export const fetchLogsFromDB = async (connectionString: string): Promise<ActivityLog[]> => {
   const pool = getPool(connectionString);
   try {
-    const { rows } = await pool.query(`SELECT * FROM ${LOGS_TABLE} ORDER BY timestamp DESC LIMIT 150`);
-    return rows.map(r => ({
-      id: r.id,
-      username: r.username,
-      action: r.action as ActivityLog['action'],
-      details: r.details,
-      location: r.location,
-      timestamp: r.timestamp
-    }));
+    const { rows } = await pool.query(`SELECT * FROM ${LOGS_TABLE} ORDER BY timestamp DESC LIMIT 100`);
+    return rows;
   } finally {
     await pool.end();
   }
 };
 
-// --- FUNÇÕES DE ESTOQUE ---
 export const fetchInventoryFromDB = async (connectionString: string): Promise<PalletPosition[]> => {
   const pool = getPool(connectionString);
   try {
     const { rows } = await pool.query(`SELECT * FROM ${TABLE_NAME}`);
     return rows.map((row: any) => ({
       id: row.id,
-      rack: row.rack,
-      level: row.level,
-      position: row.position,
-      productId: row.product_id,
-      productName: row.product_name,
-      quantity: row.quantity,
-      slots: row.slots || 1,
+      rack: row.rack as RackId,
+      level: Number(row.level),
+      position: Number(row.position),
+      productId: row.product_id || '',
+      productName: row.product_name || '',
+      quantity: Number(row.quantity || 0),
+      slots: Number(row.slots || 1),
       lastUpdated: row.last_updated
     }));
   } finally {
@@ -171,12 +145,16 @@ export const fetchInventoryFromDB = async (connectionString: string): Promise<Pa
 export const fetchMasterProductsFromDB = async (connectionString: string): Promise<MasterProduct[]> => {
   const pool = getPool(connectionString);
   try {
-    const { rows } = await pool.query(`SELECT * FROM ${MASTER_TABLE}`);
+    // Busca usando as colunas corretas (product_id, product_name, standard_quantity)
+    const { rows } = await pool.query(`SELECT * FROM ${MASTER_TABLE} ORDER BY product_name ASC`);
     return rows.map((row: any) => ({
-      productId: row.product_id,
-      productName: row.product_name,
-      standardQuantity: row.standard_quantity
+      productId: String(row.product_id || '').trim(),
+      productName: String(row.product_name || '').trim(),
+      standardQuantity: Number(row.standard_quantity || 0)
     }));
+  } catch (err) {
+    console.error("Erro ao buscar produtos mestres:", err);
+    return [];
   } finally {
     await pool.end();
   }
@@ -189,7 +167,7 @@ export const saveMasterProductToDB = async (connectionString: string, item: Mast
       INSERT INTO ${MASTER_TABLE} (product_id, product_name, standard_quantity)
       VALUES ($1, $2, $3)
       ON CONFLICT (product_id) DO UPDATE SET product_name = EXCLUDED.product_name, standard_quantity = EXCLUDED.standard_quantity;
-    `, [item.productId, item.productName, item.standardQuantity]);
+    `, [item.productId.trim().toUpperCase(), item.productName.trim().toUpperCase(), item.standardQuantity]);
   } finally {
     await pool.end();
   }
@@ -207,30 +185,16 @@ export const deleteMasterProductFromDB = async (connectionString: string, produc
 export const saveItemToDB = async (connectionString: string, item: PalletPosition) => {
   const pool = getPool(connectionString);
   try {
-    // Garantir que não existam campos nulos ou indefinidos antes de enviar ao Postgres
-    const payload = [
-      item.id.trim(),
-      item.rack,
-      item.level,
-      item.position,
-      item.productId || '',
-      item.productName || '',
-      item.quantity || 0,
-      item.slots || 1,
-      item.lastUpdated || new Date().toISOString()
-    ];
-
     await pool.query(`
       INSERT INTO ${TABLE_NAME} (id, rack, level, position, product_id, product_name, quantity, slots, last_updated)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT (id) 
-      DO UPDATE SET 
+      ON CONFLICT (id) DO UPDATE SET 
         product_id = EXCLUDED.product_id,
         product_name = EXCLUDED.product_name,
         quantity = EXCLUDED.quantity,
         slots = EXCLUDED.slots,
         last_updated = EXCLUDED.last_updated;
-    `, payload);
+    `, [item.id, item.rack, item.level, item.position, item.productId, item.productName, item.quantity, item.slots, item.lastUpdated]);
   } finally {
     await pool.end();
   }
@@ -239,7 +203,7 @@ export const saveItemToDB = async (connectionString: string, item: PalletPositio
 export const deleteItemFromDB = async (connectionString: string, item: PalletPosition) => {
   const pool = getPool(connectionString);
   try {
-    await pool.query(`DELETE FROM ${TABLE_NAME} WHERE id = $1`, [item.id.trim()]);
+    await pool.query(`DELETE FROM ${TABLE_NAME} WHERE id = $1`, [item.id]);
   } finally {
     await pool.end();
   }

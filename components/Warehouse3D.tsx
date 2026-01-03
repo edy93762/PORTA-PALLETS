@@ -119,7 +119,7 @@ export const Warehouse3D: React.FC<Warehouse3DProps> = ({ inventory, onPositionC
       </div>
 
       <Canvas shadows>
-        <PerspectiveCamera makeDefault position={[50, 45, 100]} fov={45} />
+        <PerspectiveCamera makeDefault position={[50, 45, 120]} fov={45} />
         <OrbitControls 
           enableDamping 
           dampingFactor={0.05} 
