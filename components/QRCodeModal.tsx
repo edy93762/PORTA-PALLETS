@@ -14,8 +14,11 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({ position, onClose }) =
   const [loading, setLoading] = useState(false);
   const levelLabels = ['A', 'B', 'C', 'D', 'E'];
   const levelLetter = levelLabels[position.level - 1] || position.level.toString();
-  const codeValue = `PP-${position.rack}-L-${position.level}-P-${position.pos}`;
-  const labelText = `PP ${position.rack} ${levelLetter}${position.pos}`;
+  
+  // Novo padrão: Rack Pos Level (ex: A 1 A)
+  const labelText = `${position.rack} ${position.pos} ${levelLetter}`;
+  // Valor interno para link (mantém hifens para integridade técnica se necessário)
+  const codeValue = `PP-${position.rack}-P-${position.pos}-L-${position.level}`;
 
   const handleDownloadSingle = async () => {
     setLoading(true);
@@ -36,14 +39,14 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({ position, onClose }) =
 
       // Textos
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(12);
+      doc.setFontSize(14); // Um pouco maior para o novo padrão espaçado
       doc.text(labelText, 25, 6, { align: "center" });
 
       doc.setFont("courier", "normal");
       doc.setFontSize(6);
       doc.text(codeValue, 25, 47, { align: "center" });
 
-      doc.save(`${codeValue}.pdf`);
+      doc.save(`Endereco_${position.rack}_${position.pos}_${levelLetter}.pdf`);
     } catch (e) {
       console.error(e);
       alert("Erro ao gerar PDF");
@@ -55,7 +58,7 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({ position, onClose }) =
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[250] p-4">
       <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-8 flex flex-col items-center animate-in zoom-in-95">
-        <p className="text-slate-800 mb-6 font-black bg-slate-100 px-6 py-2 rounded-xl text-lg uppercase tracking-tight">
+        <p className="text-slate-800 mb-6 font-black bg-indigo-50 text-indigo-600 border border-indigo-100 px-8 py-3 rounded-2xl text-2xl uppercase tracking-widest italic">
           {labelText}
         </p>
         

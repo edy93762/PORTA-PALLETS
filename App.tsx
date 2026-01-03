@@ -158,7 +158,7 @@ const App: React.FC = () => {
       setSelectedPosition(existing);
     } else {
       setSelectedPosition({
-        id: `${rack}${LEVEL_LABELS[level - 1]}${pos}`,
+        id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`, // Novo padrão de ID
         rack,
         level,
         position: pos,
@@ -183,10 +183,11 @@ const App: React.FC = () => {
       productName: selectedPosition.productName.toUpperCase().trim(),
       lastUpdated: new Date().toISOString() 
     };
+    const displayAddr = `${itemToSave.rack} ${itemToSave.position} ${LEVEL_LABELS[itemToSave.level-1]}`;
     try {
       await saveItemToDB(FIXED_DB_STRING, itemToSave);
       setInventory(prev => [...prev.filter(p => p.id !== itemToSave.id), itemToSave]);
-      await logActivity('ENTRADA', `Armazenado: ${itemToSave.productName}`, `${itemToSave.rack}${LEVEL_LABELS[itemToSave.level-1]}${itemToSave.position}`);
+      await logActivity('ENTRADA', `Armazenado: ${itemToSave.productName}`, displayAddr);
       setShowQR({ rack: itemToSave.rack, level: itemToSave.level, pos: itemToSave.position });
       setSelectedPosition(null);
       showFeedback('success', 'Gravado com sucesso!');
@@ -206,6 +207,7 @@ const App: React.FC = () => {
       showFeedback('error', 'Quantidade inválida.'); return;
     }
     setIsProcessingAction(true);
+    const displayAddr = `${scannedPosition.rack} ${scannedPosition.position} ${LEVEL_LABELS[scannedPosition.level-1]}`;
     try {
       if (qtdToRemove < currentQty) {
         const updated = { ...scannedPosition, quantity: currentQty - qtdToRemove, lastUpdated: new Date().toISOString() };
@@ -215,7 +217,7 @@ const App: React.FC = () => {
         await deleteItemFromDB(FIXED_DB_STRING, scannedPosition);
         setInventory(prev => prev.filter(p => p.id !== scannedPosition.id));
       }
-      await logActivity('SAIDA', `Baixa: ${scannedPosition.productName} (-${qtdToRemove})`, `${scannedPosition.rack}${LEVEL_LABELS[scannedPosition.level-1]}${scannedPosition.position}`);
+      await logActivity('SAIDA', `Baixa: ${scannedPosition.productName} (-${qtdToRemove})`, displayAddr);
       showFeedback('success', 'Baixa concluída!');
       setScannedPosition(null);
       setExitQuantity('');
@@ -268,17 +270,19 @@ const App: React.FC = () => {
       for (let p = printFilter.startPos; p <= printFilter.endPos; p++) {
         if (!first) doc.addPage([50, 50]);
         first = false;
-        const codeValue = `PP-${printFilter.rack}-L-${printFilter.level}-P-${p}`;
-        const label = `PP ${printFilter.rack} ${LEVEL_LABELS[printFilter.level-1]}${p}`;
+        // Padrão A 1 A para etiquetas
+        const labelText = `${printFilter.rack} ${p} ${LEVEL_LABELS[printFilter.level-1]}`;
+        const codeValue = `PP-${printFilter.rack}-P-${p}-L-${printFilter.level}`;
+        
         const qrDataUrl = await QRCode.toDataURL(codeValue, { width: 200, margin: 0, errorCorrectionLevel: 'H' });
         doc.setFont("helvetica", "bold");
         doc.setFontSize(10);
-        doc.text(label, 25, 6, { align: "center" });
+        doc.text(labelText, 25, 6, { align: "center" });
         doc.addImage(qrDataUrl, 'PNG', 7.5, 8, 35, 35);
         doc.setFontSize(6);
         doc.text(codeValue, 25, 47, { align: "center" });
       }
-      doc.save(`Etiquetas_PP_${printFilter.rack}_L${printFilter.level}.pdf`);
+      doc.save(`Etiquetas_PP_${printFilter.rack}_Nivel_${LEVEL_LABELS[printFilter.level-1]}.pdf`);
       showFeedback('success', 'Arquivo PDF gerado!');
       setIsPrintMenuOpen(false);
     } catch (e) { 
@@ -401,7 +405,8 @@ const App: React.FC = () => {
                       key={pos} onClick={() => handlePositionClick(activeRack, activeLevelIndex + 1, pos)}
                       className={`aspect-square rounded-xl flex flex-col items-center justify-center border-2 transition-all relative ${occ ? (isHighlighted ? 'bg-amber-500 border-amber-300 text-white shadow-[0_0_15px_rgba(245,158,11,0.5)] z-10' : 'bg-indigo-600 border-indigo-700 text-white') : 'bg-slate-50 border-transparent text-slate-300 hover:border-slate-200'}`}
                     >
-                      <span className="text-[9px] font-black">{LEVEL_LABELS[activeLevelIndex]}{pos}</span>
+                      {/* Formato compactado para a grade 2D, mas respeitando o nível selecionado */}
+                      <span className="text-[9px] font-black">{pos} {LEVEL_LABELS[activeLevelIndex]}</span>
                       {occ && <Package size={12} className="mt-0.5" />}
                     </button>
                   );
@@ -520,7 +525,7 @@ const App: React.FC = () => {
                              <div className="flex items-center gap-3">
                                 <div className="bg-slate-900 text-white w-10 h-10 rounded-xl flex flex-col items-center justify-center font-black">
                                    <span className="text-[7px]">{item.rack}</span>
-                                   <span className="text-base leading-none">{LEVEL_LABELS[item.level-1]}{item.position}</span>
+                                   <span className="text-base leading-none">{item.position} {LEVEL_LABELS[item.level-1]}</span>
                                 </div>
                                 <div>
                                    <p className="font-black text-[11px] uppercase text-slate-800 leading-none mb-1">{item.productName}</p>
@@ -575,7 +580,7 @@ const App: React.FC = () => {
           <div className="bg-white w-full max-w-sm rounded-[3rem] p-8 animate-in zoom-in-95 shadow-2xl">
             <header className="flex justify-between items-center mb-6"><h3 className="font-black text-xl text-rose-600 uppercase">Retirar Item</h3><button onClick={() => setScannedPosition(null)} className="p-2 text-slate-400"><X/></button></header>
             <div className="bg-rose-50 p-6 rounded-2xl text-center mb-6 border border-rose-100">
-               <span className="text-[10px] font-black uppercase tracking-widest text-rose-700">{scannedPosition.rack}{LEVEL_LABELS[scannedPosition.level-1]}{scannedPosition.position}</span>
+               <span className="text-[10px] font-black uppercase tracking-widest text-rose-700">{scannedPosition.rack} {scannedPosition.position} {LEVEL_LABELS[scannedPosition.level-1]}</span>
                <h4 className="text-lg font-black uppercase mt-1 leading-tight">{scannedPosition.productName}</h4>
                <p className="text-xs font-bold text-rose-600 mt-1">Saldo: {scannedPosition.quantity} un</p>
             </div>
@@ -617,9 +622,9 @@ const App: React.FC = () => {
       {isScannerOpen && (
         <ScannerModal 
           onScan={(code) => {
-            const parts = code.split('-'); 
-            const item = inventory.find(p => p.rack === parts[1] && p.level === parseInt(parts[3]) && p.position === parseInt(parts[5]));
-            if (item && item.productId) { setScannedPosition(item); setIsScannerOpen(false); } else { showFeedback('error', 'Posição Vazia!'); setIsScannerOpen(false); }
+            // Suporte a detecção inteligente baseada no padrão do ID
+            const item = inventory.find(p => p.id === code || p.id === code.replace(/-/g, ''));
+            if (item && item.productId) { setScannedPosition(item); setIsScannerOpen(false); } else { showFeedback('error', 'Posição Vazia ou ID Inválido!'); setIsScannerOpen(false); }
           }} onClose={() => setIsScannerOpen(false)} 
         />
       )}
@@ -635,7 +640,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL ENTRADA/DETALHES - BUSCA AUTOMÁTICA OTIMIZADA */}
+      {/* MODAL ENTRADA/DETALHES - PADRÃO A 1 A */}
       {selectedPosition && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[6000] flex items-center justify-center p-6" onClick={() => setSelectedPosition(null)}>
            <div className="bg-white rounded-[3rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
@@ -653,7 +658,6 @@ const App: React.FC = () => {
                     value={selectedPosition.productId || ''} 
                     onChange={e => {
                       const val = e.target.value.toUpperCase();
-                      // Busca automática com trim para evitar falhas por espaços
                       const master = masterProducts.find(m => m.productId.trim() === val.trim());
                       
                       setSelectedPosition(prev => {
@@ -692,7 +696,10 @@ const App: React.FC = () => {
 
                 <div className="bg-slate-50 p-4 rounded-xl border border-dashed border-slate-200">
                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">Endereço de Armazenagem</p>
-                   <p className="text-xl font-black text-indigo-600 text-center">{selectedPosition.rack}{LEVEL_LABELS[selectedPosition.level-1]}{selectedPosition.position}</p>
+                   {/* NOVO PADRÃO VISUAL A 1 A */}
+                   <p className="text-3xl font-black text-indigo-600 text-center tracking-wider">
+                    {selectedPosition.rack} {selectedPosition.position} {LEVEL_LABELS[selectedPosition.level-1]}
+                   </p>
                 </div>
 
                 <div className="flex gap-2 pt-2">
