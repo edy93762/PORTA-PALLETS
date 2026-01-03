@@ -55,6 +55,7 @@ const App: React.FC = () => {
   const [isProcessingAction, setIsProcessingAction] = useState(false);
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
   const [highlightProductId, setHighlightProductId] = useState<string | null>(null);
+  const [hoveredInfo, setHoveredInfo] = useState<{ item: PalletPosition, x: number, y: number } | null>(null);
 
   const [inventory, setInventory] = useState<PalletPosition[]>([]);
   const [masterProducts, setMasterProducts] = useState<MasterProduct[]>([]);
@@ -158,7 +159,7 @@ const App: React.FC = () => {
       setSelectedPosition(existing);
     } else {
       setSelectedPosition({
-        id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`, // Novo padrão de ID
+        id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`, 
         rack,
         level,
         position: pos,
@@ -270,7 +271,6 @@ const App: React.FC = () => {
       for (let p = printFilter.startPos; p <= printFilter.endPos; p++) {
         if (!first) doc.addPage([50, 50]);
         first = false;
-        // Padrão A 1 A para etiquetas
         const labelText = `${printFilter.rack} ${p} ${LEVEL_LABELS[printFilter.level-1]}`;
         const codeValue = `PP-${printFilter.rack}-P-${p}-L-${printFilter.level}`;
         
@@ -342,6 +342,21 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* TOOLTIP FLUTUANTE AO PASSAR O MOUSE */}
+      {hoveredInfo && (
+        <div 
+          className="fixed pointer-events-none z-[10000] bg-slate-900/95 backdrop-blur-md text-white p-4 rounded-2xl shadow-2xl border border-white/10 flex flex-col gap-1 min-w-[180px] animate-in fade-in zoom-in-95 duration-75"
+          style={{ left: hoveredInfo.x + 15, top: hoveredInfo.y + 15 }}
+        >
+          <p className="text-[10px] font-black uppercase text-indigo-400 tracking-widest">{hoveredInfo.item.rack} {hoveredInfo.item.position} {LEVEL_LABELS[hoveredInfo.item.level-1]}</p>
+          <h4 className="font-black uppercase text-xs truncate max-w-[200px]">{hoveredInfo.item.productName}</h4>
+          <div className="flex justify-between items-center mt-2 pt-2 border-t border-white/10">
+            <span className="text-[9px] font-bold text-slate-400 uppercase">SKU: {hoveredInfo.item.productId}</span>
+            <span className="text-xs font-black text-indigo-400">{hoveredInfo.item.quantity}un</span>
+          </div>
+        </div>
+      )}
+
       <header className="bg-white border-b border-slate-200 sticky top-0 z-[1000] px-6 py-4 flex justify-between items-center shadow-sm">
         <div className="flex items-center gap-3">
           <Warehouse className="text-indigo-600 w-7 h-7" />
@@ -402,10 +417,21 @@ const App: React.FC = () => {
                   
                   return (
                     <button 
-                      key={pos} onClick={() => handlePositionClick(activeRack, activeLevelIndex + 1, pos)}
-                      className={`aspect-square rounded-xl flex flex-col items-center justify-center border-2 transition-all relative ${occ ? (isHighlighted ? 'bg-amber-500 border-amber-300 text-white shadow-[0_0_15px_rgba(245,158,11,0.5)] z-10' : 'bg-indigo-600 border-indigo-700 text-white') : 'bg-slate-50 border-transparent text-slate-300 hover:border-slate-200'}`}
+                      key={pos} 
+                      onClick={() => handlePositionClick(activeRack, activeLevelIndex + 1, pos)}
+                      onMouseEnter={(e) => {
+                        if (occ) {
+                          setHoveredInfo({ item: occ, x: e.clientX, y: e.clientY });
+                        }
+                      }}
+                      onMouseMove={(e) => {
+                        if (occ) {
+                          setHoveredInfo({ item: occ, x: e.clientX, y: e.clientY });
+                        }
+                      }}
+                      onMouseLeave={() => setHoveredInfo(null)}
+                      className={`aspect-square rounded-xl flex flex-col items-center justify-center border-2 transition-all relative ${occ ? (isHighlighted ? 'bg-amber-500 border-amber-300 text-white shadow-[0_0_15px_rgba(245,158,11,0.5)] z-10' : 'bg-indigo-600 border-indigo-700 text-white hover:scale-105') : 'bg-slate-50 border-transparent text-slate-300 hover:border-slate-200'}`}
                     >
-                      {/* Formato compactado para a grade 2D, mas respeitando o nível selecionado */}
                       <span className="text-[9px] font-black">{pos} {LEVEL_LABELS[activeLevelIndex]}</span>
                       {occ && <Package size={12} className="mt-0.5" />}
                     </button>
@@ -622,7 +648,6 @@ const App: React.FC = () => {
       {isScannerOpen && (
         <ScannerModal 
           onScan={(code) => {
-            // Suporte a detecção inteligente baseada no padrão do ID
             const item = inventory.find(p => p.id === code || p.id === code.replace(/-/g, ''));
             if (item && item.productId) { setScannedPosition(item); setIsScannerOpen(false); } else { showFeedback('error', 'Posição Vazia ou ID Inválido!'); setIsScannerOpen(false); }
           }} onClose={() => setIsScannerOpen(false)} 
@@ -696,7 +721,6 @@ const App: React.FC = () => {
 
                 <div className="bg-slate-50 p-4 rounded-xl border border-dashed border-slate-200">
                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">Endereço de Armazenagem</p>
-                   {/* NOVO PADRÃO VISUAL A 1 A */}
                    <p className="text-3xl font-black text-indigo-600 text-center tracking-wider">
                     {selectedPosition.rack} {selectedPosition.position} {LEVEL_LABELS[selectedPosition.level-1]}
                    </p>
