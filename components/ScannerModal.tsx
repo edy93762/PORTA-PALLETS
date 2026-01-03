@@ -1,7 +1,7 @@
 
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
-import { X, Camera, RefreshCw, AlertTriangle, Loader2 } from 'lucide-react';
+import { X, Camera, Loader2, AlertTriangle, Scan } from 'lucide-react';
 
 interface ScannerModalProps {
   onScan: (decodedText: string) => void;
@@ -47,16 +47,14 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose, cus
         }
 
         const config = { 
-          fps: 15, 
-          qrbox: { width: 250, height: 250 },
+          fps: 20, 
+          qrbox: { width: 260, height: 260 },
           aspectRatio: 1.0
         };
 
         const onScanSuccess = (decodedText: string) => {
           if (isMounted) {
             onScan(decodedText);
-            // Não paramos o scanner aqui para permitir fluxos múltiplos se necessário
-            // O componente pai decide quando fechar
           }
         };
 
@@ -96,52 +94,93 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose, cus
   }, [onScan]);
 
   return (
-    <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[4500] flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-lg bg-white rounded-[3rem] overflow-hidden shadow-2xl animate-in zoom-in-95">
-        <header className="p-6 bg-indigo-600 text-white flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <Camera size={24} />
-            <div className="flex flex-col">
-              <h3 className="font-black uppercase italic tracking-tighter leading-none">Scanner Ativo</h3>
-              {customHeader && <div className="mt-2">{customHeader}</div>}
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 bg-white/10 rounded-xl hover:bg-white/20 transition-all">
-            <X size={24} />
-          </button>
-        </header>
+    <div className="fixed inset-0 bg-slate-950 z-[9999] flex flex-col items-center justify-center animate-in fade-in duration-300">
+      
+      {/* BOTÃO FECHAR FLUTUANTE - ÁREA DE TOQUE AMPLIADA PARA MOBILE */}
+      <button 
+        onClick={onClose} 
+        className="absolute top-6 right-6 z-[100] w-14 h-14 bg-white/10 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center text-white active:scale-90 transition-all shadow-2xl"
+        aria-label="Fechar Scanner"
+      >
+        <X size={32} />
+      </button>
 
-        <div className="p-8 flex flex-col items-center min-h-[380px] justify-center relative bg-slate-50">
-          {errorMsg ? (
-            <div className="w-full p-8 bg-rose-50 border-2 border-rose-100 rounded-[2rem] flex flex-col items-center text-center gap-4">
-              <AlertTriangle className="text-rose-500 w-12 h-12" />
-              <div>
-                <h4 className="font-black text-rose-900 uppercase italic">Erro de Câmera</h4>
-                <p className="text-[11px] text-rose-600 font-bold uppercase mt-4 leading-relaxed">
-                  {errorMsg}
-                </p>
-              </div>
-              <button onClick={() => window.location.reload()} className="bg-rose-600 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase">REINICIAR</button>
-            </div>
-          ) : (
-            <>
-              <div className="relative w-full aspect-square bg-black rounded-[2rem] overflow-hidden border-4 border-white shadow-2xl">
-                <div id={containerId} className="w-full h-full"></div>
-                {isInitializing && (
-                  <div className="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center gap-4 z-10">
-                    <Loader2 className="w-10 h-10 animate-spin text-white opacity-50" />
-                  </div>
-                )}
-                {!isInitializing && (
-                  <div className="absolute inset-0 pointer-events-none z-20 flex items-center justify-center">
-                    <div className="w-48 h-48 border-2 border-indigo-500 rounded-3xl opacity-50 animate-pulse"></div>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
+      {/* HEADER DISCRETO */}
+      <div className="absolute top-8 left-0 right-0 flex justify-center pointer-events-none z-[80]">
+        <div className="flex items-center gap-3 bg-black/40 backdrop-blur-md px-6 py-3 rounded-full border border-white/10">
+          <Camera size={18} className="text-indigo-400" />
+          <span className="text-[11px] font-black uppercase tracking-widest text-white italic">Scanner Ativo</span>
         </div>
       </div>
+
+      {/* ÁREA DA CÂMERA */}
+      <div className="relative w-full h-full flex items-center justify-center bg-black">
+        <div id={containerId} className="w-full h-full object-cover"></div>
+
+        {/* OVERLAY DE SCAN */}
+        {!isInitializing && !errorMsg && (
+          <div className="absolute inset-0 pointer-events-none z-20 flex flex-col items-center justify-center">
+            {/* MOLDURA DE SCAN */}
+            <div className="relative w-64 h-64 border-2 border-white/20 rounded-[2rem] overflow-hidden">
+              {/* CANTOS DESTACADOS */}
+              <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-500 rounded-tl-xl"></div>
+              <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 rounded-tr-xl"></div>
+              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 rounded-bl-xl"></div>
+              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 rounded-br-xl"></div>
+              
+              {/* LINHA DE SCAN ANIMADA */}
+              <div className="w-full h-1 bg-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.8)] absolute top-0 animate-[scan_2s_infinite]"></div>
+            </div>
+
+            <div className="mt-12 text-center space-y-2">
+              <p className="text-white font-black uppercase italic tracking-tighter text-sm drop-shadow-lg">Aponte para o QR Code do Pallet</p>
+              <p className="text-white/40 font-bold uppercase text-[9px] tracking-widest">O scan é automático ao detectar</p>
+            </div>
+          </div>
+        )}
+
+        {/* LOADING STATE */}
+        {isInitializing && !errorMsg && (
+          <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center gap-4 z-[90]">
+            <Loader2 className="w-12 h-12 animate-spin text-indigo-500" />
+            <span className="text-white/40 font-black uppercase text-[10px] tracking-[0.2em]">Iniciando Câmera...</span>
+          </div>
+        )}
+
+        {/* ERROR STATE */}
+        {errorMsg && (
+          <div className="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center p-10 text-center z-[95]">
+            <div className="bg-rose-500/10 p-8 rounded-[3rem] border border-rose-500/20 max-w-xs">
+              <AlertTriangle className="text-rose-500 w-16 h-16 mx-auto mb-6" />
+              <h4 className="font-black text-white uppercase italic text-lg mb-2">Ops! Problema na Câmera</h4>
+              <p className="text-rose-200/60 font-bold text-[10px] uppercase leading-relaxed mb-8">
+                {errorMsg}
+              </p>
+              <button 
+                onClick={() => window.location.reload()} 
+                className="w-full bg-rose-600 text-white py-4 rounded-2xl font-black text-xs uppercase shadow-xl active:scale-95 transition-all"
+              >
+                REINICIAR APP
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <style>{`
+        @keyframes scan {
+          0% { top: 0%; opacity: 0; }
+          10% { opacity: 1; }
+          90% { opacity: 1; }
+          100% { top: 100%; opacity: 0; }
+        }
+        #qr-reader__dashboard { display: none !important; }
+        #qr-reader video { 
+          width: 100% !important; 
+          height: 100% !important; 
+          object-fit: cover !important;
+        }
+      `}</style>
     </div>
   );
 };
