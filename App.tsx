@@ -1,11 +1,10 @@
-
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Package, Warehouse, X, ScanLine, Printer, Loader2, 
   ClipboardList, Trash2, Menu, AlertCircle, CheckCircle2, Search as SearchIcon, 
   QrCode, ArrowDownRight, ListChecks, History, LogOut, ArrowRightCircle, UserPlus, ShieldCheck, MapPin, Info, 
-  FileDown, PlusCircle, Filter, Save
+  FileDown, PlusCircle, Filter, Save, PackageMinus, PackageX, Ban, Calculator, Plus, ArrowRight, Minus, Calendar, User
 } from 'lucide-react';
 import { PalletPosition, RackId, MasterProduct, AppUser, ActivityLog } from './types';
 import { QRCodeModal } from './components/QRCodeModal';
@@ -33,6 +32,11 @@ const POSITIONS_PER_LEVEL = 66;
 const FIXED_DB_STRING = "postgresql://neondb_owner:npg_JaZLTzrqMc09@ep-fragrant-cherry-ac95x95d-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require";
 const SECRET_REGISTRATION_KEY = "Shopee@2026";
 const STORAGE_KEY = "almox_pro_user_session";
+
+// Definição de posições bloqueadas (Pilares/Inutilizáveis)
+const BLOCKED_LOCATIONS = [
+  { rack: 'A', level: 2, positions: [35, 36] } // Rack A, Nível B (índice 2 na lógica 1-based), posições 35 e 36
+];
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
@@ -69,6 +73,10 @@ const App: React.FC = () => {
   const [activeLevelIndex, setActiveLevelIndex] = useState<number>(0); 
   const [selectedPosition, setSelectedPosition] = useState<PalletPosition | null>(null);
   const [palletDetails, setPalletDetails] = useState<PalletPosition | null>(null);
+  
+  // Estados para Saída Parcial
+  const [isPartialExitMode, setIsPartialExitMode] = useState(false);
+  const [partialQuantity, setPartialQuantity] = useState<string>('');
 
   const [showQR, setShowQR] = useState<{ rack: string; level: number; pos: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -162,7 +170,15 @@ const App: React.FC = () => {
   };
 
   const stats = useMemo(() => {
-    const total = RACKS.length * LEVEL_LABELS.length * POSITIONS_PER_LEVEL;
+    // Calcula o total de posições bloqueadas para subtrair do total
+    let blockedCount = 0;
+    BLOCKED_LOCATIONS.forEach(b => {
+      blockedCount += b.positions.length;
+    });
+
+    const totalRaw = RACKS.length * LEVEL_LABELS.length * POSITIONS_PER_LEVEL;
+    const total = totalRaw - blockedCount; // Capacidade real utilizável
+    
     const occupied = inventory.length;
     const free = total - occupied;
     const rate = total > 0 ? ((occupied / total) * 100).toFixed(1) : 0;
@@ -206,8 +222,27 @@ const App: React.FC = () => {
     const gridElements = [];
     for (let p = 1; p <= POSITIONS_PER_LEVEL; p++) {
       const pos = p;
-      const occ = inventory.find(item => item.rack === activeRack && item.level === (activeLevelIndex + 1) && item.position === pos);
-      const isTail = inventory.find(item => item.rack === activeRack && item.level === (activeLevelIndex + 1) && item.position === (pos - 1) && item.slots === 2);
+      const currentLevel = activeLevelIndex + 1;
+
+      // Verifica se é uma posição bloqueada (Pilar/Estrutura)
+      const isBlocked = BLOCKED_LOCATIONS.some(b => 
+        b.rack === activeRack && 
+        b.level === currentLevel && 
+        b.positions.includes(pos)
+      );
+
+      if (isBlocked) {
+        gridElements.push(
+          <div key={pos} className="aspect-square rounded-2xl font-black text-[10px] flex flex-col items-center justify-center border shadow-sm bg-red-900 border-red-800 text-white/40 cursor-not-allowed opacity-80">
+             <span className="mb-1">{pos}</span>
+             <Ban size={14} className="text-red-400"/>
+          </div>
+        );
+        continue;
+      }
+
+      const occ = inventory.find(item => item.rack === activeRack && item.level === currentLevel && item.position === pos);
+      const isTail = inventory.find(item => item.rack === activeRack && item.level === currentLevel && item.position === (pos - 1) && item.slots === 2);
       
       if (isTail) continue;
 
@@ -259,11 +294,26 @@ const App: React.FC = () => {
   };
 
   const handlePositionClick = (rack: RackId, level: number, pos: number) => {
+    // Verifica se é posição bloqueada antes de interagir
+    const isBlocked = BLOCKED_LOCATIONS.some(b => 
+      b.rack === rack && 
+      b.level === level && 
+      b.positions.includes(pos)
+    );
+    if (isBlocked) {
+      showFeedback('error', 'Esta posição está bloqueada (Pilar/Estrutura).');
+      return;
+    }
+
     // Busca SEMPRE no estado de inventário mais recente
     const occ = inventory.find(p => p.rack === rack && p.level === level && p.position === pos);
     const isTail = inventory.find(p => p.rack === rack && p.level === level && p.position === (pos - 1) && p.slots === 2);
     const target = occ || isTail;
     
+    // Resetar estados de parciais ao abrir
+    setIsPartialExitMode(false);
+    setPartialQuantity('');
+
     if (target) { 
       // Se tiver item: Abre Detalhes/Saída
       setPalletDetails({ ...target }); 
@@ -293,6 +343,14 @@ const App: React.FC = () => {
       
       let pagesAdded = 0;
       for (let p = 1; p <= POSITIONS_PER_LEVEL; p++) {
+        // Pula posições bloqueadas na impressão também
+        const isBlocked = BLOCKED_LOCATIONS.some(b => 
+          b.rack === activeRack && 
+          b.level === currentLevel && 
+          b.positions.includes(p)
+        );
+        if (isBlocked) continue;
+
         const isOccupied = inventory.some(item => item.rack === activeRack && item.level === currentLevel && item.position === p);
         if (printFilter === 'free' && isOccupied) continue;
 
@@ -370,6 +428,120 @@ const App: React.FC = () => {
       showFeedback('error', 'Erro ao cadastrar novo SKU.');
     } finally {
       setIsProcessingAction(false);
+    }
+  };
+
+  const handleDownloadReport = () => {
+    const doc = new jsPDF();
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(18);
+    doc.text("Relatório de Saldo Geral - Almox", 15, 20);
+    doc.setFontSize(10);
+    doc.text(`Gerado em: ${new Date().toLocaleString()}`, 15, 28);
+    
+    let y = 40;
+    doc.setFontSize(9);
+    doc.text("SKU", 15, y);
+    doc.text("DESCRIÇÃO", 50, y);
+    doc.text("QTD TOTAL", 170, y);
+    doc.line(15, y + 2, 195, y + 2);
+    y += 8;
+
+    aggregatedInventory.forEach((item) => {
+      if (y > 280) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.setFont("helvetica", "normal");
+      doc.text(item.id.substring(0, 15), 15, y);
+      doc.text(item.name.substring(0, 45), 50, y);
+      doc.setFont("helvetica", "bold");
+      doc.text(`${item.total}`, 170, y);
+      y += 6;
+      
+      // Lista posições
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(7);
+      doc.text(`Locais: ${item.locs.join(', ')}`, 15, y);
+      y += 8;
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+    });
+
+    doc.save("Relatorio_Saldo_Geral.pdf");
+  };
+
+  // Funções de Ação de Saída
+  const handleTotalExit = async () => {
+    if (!palletDetails) return;
+    if(confirm("Confirmar BAIXA TOTAL deste item? (Zerar posição)")) {
+      setIsProcessingAction(true);
+      const opName = currentUser?.username || 'Sistema';
+      try {
+        await deleteItemFromDB(FIXED_DB_STRING, palletDetails);
+        await saveLogToDB(FIXED_DB_STRING, {
+          username: opName,
+          action: 'SAIDA',
+          details: `BAIXA TOTAL: ${palletDetails.productId} (${palletDetails.quantity} UN)`,
+          location: `${palletDetails.rack}${palletDetails.position}${LEVEL_LABELS[palletDetails.level-1]}`,
+          timestamp: new Date().toISOString()
+        });
+        await loadInitialData();
+        setPalletDetails(null); 
+        showFeedback('success', 'Baixa realizada com sucesso!');
+      } catch (e) {
+        showFeedback('error', 'Falha ao realizar baixa.');
+      } finally {
+        setIsProcessingAction(false);
+      }
+    }
+  };
+
+  const handlePartialExit = async () => {
+    if (!palletDetails) return;
+    const qtdToRemove = parseInt(partialQuantity);
+
+    if (isNaN(qtdToRemove) || qtdToRemove <= 0) {
+      showFeedback('error', 'Digite uma quantidade válida para retirada.');
+      return;
+    }
+
+    if (qtdToRemove > (palletDetails.quantity || 0)) {
+      showFeedback('error', 'Quantidade de saída maior que o estoque atual!');
+      return;
+    }
+
+    if (qtdToRemove === palletDetails.quantity) {
+      handleTotalExit(); // Se for tudo, vira baixa total
+      return;
+    }
+
+    // Removido confirm() nativo para evitar bloqueios em mobile. O botão na UI já serve como confirmação.
+    setIsProcessingAction(true);
+    const opName = currentUser?.username || 'Sistema';
+    const newQuantity = (palletDetails.quantity || 0) - qtdToRemove;
+    const updatedPallet = { 
+      ...palletDetails, 
+      quantity: newQuantity,
+      lastUpdated: new Date().toISOString()
+    };
+
+    try {
+        await saveItemToDB(FIXED_DB_STRING, updatedPallet);
+        await saveLogToDB(FIXED_DB_STRING, {
+          username: opName,
+          action: 'SAIDA',
+          details: `SAIDA PARCIAL: ${palletDetails.productId} (-${qtdToRemove} UN). RESTAM: ${newQuantity}`,
+          location: `${palletDetails.rack}${palletDetails.position}${LEVEL_LABELS[palletDetails.level-1]}`,
+          timestamp: new Date().toISOString()
+        });
+        await loadInitialData();
+        setPalletDetails(null); 
+        showFeedback('success', `Saída parcial de ${qtdToRemove} UN registrada!`);
+    } catch (e) {
+        showFeedback('error', 'Falha ao registrar saída parcial.');
+    } finally {
+        setIsProcessingAction(false);
     }
   };
 
@@ -629,87 +801,149 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {isLogsOpen && (
-        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[8000] flex items-center justify-center p-0 lg:p-10" onClick={() => setIsLogsOpen(false)}>
-           <div className="bg-white rounded-none lg:rounded-[3rem] w-full max-w-4xl h-full lg:h-[85vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+      {/* RELATÓRIO DE SALDO GERAL */}
+      {isInventoryReportOpen && (
+        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[8000] flex items-center justify-center p-0 lg:p-10" onClick={() => setIsInventoryReportOpen(false)}>
+           <div className="bg-white rounded-none lg:rounded-[3rem] w-full max-w-5xl h-full lg:h-[85vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
               <header className="p-8 border-b flex justify-between items-center shrink-0">
                 <div className="flex items-center gap-4">
-                  <div className="p-3 bg-indigo-600 text-white rounded-2xl shadow-lg"><History size={24}/></div>
-                  <h3 className="font-black text-2xl italic uppercase text-slate-800">Histórico de Movimentações</h3>
+                  <div className="p-3 bg-emerald-600 text-white rounded-2xl shadow-lg"><ListChecks size={24}/></div>
+                  <h3 className="font-black text-2xl italic uppercase text-slate-800">Saldo Geral de Estoque</h3>
                 </div>
-                <button onClick={() => setIsLogsOpen(false)} className="p-4 bg-slate-100 rounded-2xl hover:bg-slate-200 transition-all"><X /></button>
+                <div className="flex gap-3">
+                  <button onClick={handleDownloadReport} className="px-6 py-3 bg-slate-800 text-white rounded-2xl font-black uppercase text-xs flex items-center gap-2 hover:bg-slate-700 transition-all shadow-md">
+                     <FileDown size={16}/> Baixar PDF
+                  </button>
+                  <button onClick={() => setIsInventoryReportOpen(false)} className="p-4 bg-slate-100 rounded-2xl hover:bg-slate-200 transition-all"><X /></button>
+                </div>
               </header>
-              <div className="flex-1 overflow-y-auto p-8 space-y-4 no-scrollbar">
-                 {logs.map(log => (
-                   <div key={log.id} className="p-6 bg-slate-50 rounded-[2rem] border-2 border-transparent flex flex-col md:flex-row md:items-center justify-between gap-4">
-                     <div className="flex items-center gap-4">
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black text-white shadow-md ${log.action === 'ENTRADA' ? 'bg-emerald-500' : log.action === 'SAIDA' ? 'bg-rose-500' : 'bg-slate-400'}`}>
-                           {log.action.charAt(0)}
-                        </div>
-                        <div>
-                          <h4 className="font-black text-slate-800 uppercase text-xs leading-tight mb-1">{log.details}</h4>
-                          <div className="flex gap-4 text-[9px] font-bold text-slate-400 uppercase tracking-widest">
-                            <span className="flex items-center gap-1"><UserPlus size={10}/> {log.username}</span>
-                            <span className="flex items-center gap-1"><MapPin size={10}/> {log.location || 'N/A'}</span>
-                          </div>
-                        </div>
-                     </div>
-                     <div className="text-left md:text-right">
-                       <span className="text-[10px] font-black text-indigo-600 uppercase block">{new Date(log.timestamp).toLocaleDateString()}</span>
-                       <span className="text-[10px] font-bold text-slate-300 uppercase block">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                     </div>
-                   </div>
-                 ))}
+
+              <div className="p-6 bg-slate-50 border-b flex items-center gap-4 shrink-0">
+                 <div className="relative flex-1">
+                    <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20}/>
+                    <input type="text" placeholder="FILTRAR POR SKU OU NOME..." className="w-full pl-12 p-4 bg-white border-2 border-slate-200 rounded-2xl font-black uppercase outline-none focus:border-emerald-600 transition-all shadow-sm" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                 </div>
+                 <div className="bg-white px-6 py-4 rounded-2xl border border-slate-200 shadow-sm">
+                   <span className="text-[10px] font-black uppercase text-slate-400 block">Total SKUs</span>
+                   <span className="text-xl font-black text-emerald-600">{aggregatedInventory.length}</span>
+                 </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-0 no-scrollbar">
+                 <table className="w-full text-left border-collapse">
+                   <thead className="bg-slate-100 sticky top-0 z-10 shadow-sm">
+                     <tr>
+                       <th className="p-6 text-[10px] font-black text-slate-500 uppercase tracking-widest">SKU / Produto</th>
+                       <th className="p-6 text-[10px] font-black text-slate-500 uppercase tracking-widest text-center">Total (UN)</th>
+                       <th className="p-6 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Endereços</th>
+                     </tr>
+                   </thead>
+                   <tbody className="divide-y divide-slate-100">
+                     {aggregatedInventory.length > 0 ? aggregatedInventory.map((item, idx) => (
+                       <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                         <td className="p-6">
+                           <span className="text-[10px] font-black text-emerald-600 uppercase block mb-1">SKU: {item.id}</span>
+                           <span className="font-bold text-slate-800 uppercase text-sm block">{item.name}</span>
+                         </td>
+                         <td className="p-6 text-center">
+                           <span className="bg-slate-800 text-white px-4 py-2 rounded-xl font-black text-sm shadow-sm">{item.total}</span>
+                         </td>
+                         <td className="p-6 text-right">
+                           <div className="flex flex-wrap justify-end gap-1">
+                             {item.locs.map(loc => (
+                               <span key={loc} className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-[9px] font-bold text-slate-500 uppercase">{loc}</span>
+                             ))}
+                           </div>
+                         </td>
+                       </tr>
+                     )) : (
+                       <tr>
+                         <td colSpan={3} className="p-10 text-center opacity-40">
+                            <Package size={48} className="mx-auto mb-4"/>
+                            <span className="text-xs font-black uppercase">Nenhum item em estoque</span>
+                         </td>
+                       </tr>
+                     )}
+                   </tbody>
+                 </table>
               </div>
            </div>
         </div>
       )}
 
-      {isInventoryReportOpen && (
-        <div className="fixed inset-0 bg-white lg:bg-slate-900/95 lg:backdrop-blur-xl z-[8000] flex flex-col" onClick={() => setIsInventoryReportOpen(false)}>
-          <div className="bg-white lg:rounded-[3rem] w-full lg:max-w-4xl lg:h-[85vh] flex flex-col overflow-hidden lg:m-auto shadow-2xl" onClick={e => e.stopPropagation()}>
-            <header className="p-8 border-b flex justify-between items-center shrink-0">
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-indigo-600 text-white rounded-2xl shadow-lg"><ListChecks size={24}/></div>
-                <h3 className="font-black text-2xl italic uppercase text-slate-800">Saldo Geral de Itens</h3>
-              </div>
-              <button onClick={() => setIsInventoryReportOpen(false)} className="p-3 bg-slate-100 rounded-2xl"><X /></button>
-            </header>
-            <div className="p-6 bg-slate-50 border-b flex items-center gap-4 shrink-0">
-              <div className="relative flex-1">
-                <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20}/>
-                <input type="text" placeholder="BUSCAR SALDO..." className="w-full pl-12 p-4 bg-white border-2 border-slate-100 rounded-2xl font-black uppercase outline-none focus:border-indigo-600" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-8 space-y-4 no-scrollbar">
-                {aggregatedInventory.length > 0 ? aggregatedInventory.map(item => (
-                  <div key={item.id} className="p-8 bg-white border-2 border-slate-50 rounded-[2.5rem] shadow-sm flex items-center justify-between hover:border-indigo-100 transition-all">
-                    <div className="max-w-[70%]">
-                      <span className="font-black text-indigo-600 text-xs uppercase block mb-1">SKU: {item.id}</span>
-                      <h4 className="font-black text-slate-800 text-xl uppercase leading-tight mb-4">{item.name}</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {item.locs.map((loc, i) => (
-                          <span key={i} className="px-3 py-1.5 bg-indigo-50 border border-indigo-100 rounded-xl text-[9px] font-black text-indigo-600 shadow-sm uppercase italic">
-                            {loc}
-                          </span>
-                        ))}
+      {/* HISTÓRICO DE LOGS */}
+      {isLogsOpen && (
+        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[8000] flex items-center justify-center p-0 lg:p-10" onClick={() => setIsLogsOpen(false)}>
+           <div className="bg-white rounded-none lg:rounded-[3rem] w-full max-w-4xl h-full lg:h-[85vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+              <header className="p-8 border-b flex justify-between items-center shrink-0">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-amber-500 text-white rounded-2xl shadow-lg"><History size={24}/></div>
+                  <h3 className="font-black text-2xl italic uppercase text-slate-800">Histórico de Atividades</h3>
+                </div>
+                <button onClick={() => setIsLogsOpen(false)} className="p-4 bg-slate-100 rounded-2xl hover:bg-slate-200 transition-all"><X /></button>
+              </header>
+
+              <div className="flex-1 overflow-y-auto p-8 space-y-4 no-scrollbar bg-slate-50/50">
+                 {logs.length > 0 ? logs.map((log) => (
+                   <div key={log.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between hover:border-amber-200 transition-all">
+                      <div className="flex items-start gap-4">
+                         <div className={`p-3 rounded-xl shrink-0 ${
+                           log.action === 'ENTRADA' ? 'bg-emerald-100 text-emerald-600' : 
+                           log.action === 'SAIDA' ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-600'
+                         }`}>
+                           {log.action === 'ENTRADA' ? <ArrowDownRight size={20}/> : 
+                            log.action === 'SAIDA' ? <ArrowRightCircle size={20}/> : <Info size={20}/>}
+                         </div>
+                         <div>
+                            <span className={`text-[10px] font-black uppercase mb-1 block ${
+                               log.action === 'ENTRADA' ? 'text-emerald-600' : 
+                               log.action === 'SAIDA' ? 'text-rose-600' : 'text-slate-500'
+                            }`}>{log.action}</span>
+                            <p className="font-bold text-slate-800 text-sm uppercase leading-snug">{log.details}</p>
+                            {log.location && <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md mt-2 inline-block">LOCAL: {log.location}</span>}
+                         </div>
                       </div>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-4xl font-black text-slate-800 italic">{item.total}</span>
-                      <span className="text-[10px] font-bold text-slate-400 ml-2 uppercase">Total UN</span>
-                    </div>
-                  </div>
-                )) : (
-                  <div className="text-center py-20 opacity-20 flex flex-col items-center">
-                    <Package size={64} className="mb-4" />
-                    <span className="font-black uppercase tracking-widest italic">Nenhum item em estoque</span>
-                  </div>
-                )}
-            </div>
-          </div>
+                      <div className="flex flex-col items-end gap-1 text-right min-w-[100px]">
+                         <div className="flex items-center gap-1.5 text-[10px] font-black text-slate-400 uppercase">
+                            <Calendar size={10}/>
+                            {new Date(log.timestamp).toLocaleDateString()}
+                         </div>
+                         <div className="flex items-center gap-1.5 text-[10px] font-black text-slate-400 uppercase">
+                            <History size={10}/>
+                            {new Date(log.timestamp).toLocaleTimeString()}
+                         </div>
+                         <div className="flex items-center gap-1.5 text-[10px] font-black text-slate-800 bg-slate-100 px-2 py-1 rounded-lg uppercase mt-1">
+                            <User size={10}/>
+                            {log.username}
+                         </div>
+                      </div>
+                   </div>
+                 )) : (
+                   <div className="flex flex-col items-center justify-center py-20 opacity-40">
+                     <History size={48} className="mb-4"/>
+                     <p className="font-black uppercase text-xs">Sem registros recentes</p>
+                   </div>
+                 )}
+              </div>
+           </div>
         </div>
       )}
+
+      {/* SCANNER E MODAIS DE QR */}
+      {isScannerOpen && <ScannerModal onScan={(text) => {
+        if (isProcessingAction) return;
+        const regex = /PP-([A-D])-P-(\d+)-L-(\d+)/i;
+        const match = text.match(regex);
+        if (match) { 
+          setIsScannerOpen(false); 
+          // Chama a função central de clique para decidir entre entrada ou saída baseado no inventário ATUAL
+          handlePositionClick(match[1], parseInt(match[3]), parseInt(match[2])); 
+        } else {
+          showFeedback('error', 'Código QR não reconhecido como endereço válido.');
+        }
+      }} onClose={() => setIsScannerOpen(false)} />}
+      
+      {showQR && <QRCodeModal position={showQR} onClose={() => setShowQR(null)} isOccupied={inventory.some(p => p.rack === showQR.rack && p.level === showQR.level && p.position === showQR.pos)} onManage={() => { handlePositionClick(showQR.rack, showQR.level, showQR.pos); setShowQR(null); }} />}
 
       {/* MODAL ENTRADA */}
       {selectedPosition && (
@@ -734,7 +968,7 @@ const App: React.FC = () => {
                     });
                     loadInitialData().then(() => {
                       setSelectedPosition(null); 
-                      showFeedback('success', 'Entrada concluída!');
+                      showFeedback('success', `Entrada concluída! Quantidade Total: ${selectedPosition.quantity} UN`);
                       setIsProcessingAction(false);
                     });
                  }).catch(() => {
@@ -747,8 +981,34 @@ const App: React.FC = () => {
                   setSelectedPosition({...selectedPosition, productId: val, productName: m?.productName || '', quantity: m?.standardQuantity || 0});
                 }} required />
                 <datalist id="sku-list">{masterProducts.map(m => <option key={m.productId} value={m.productId}>{m.productName}</option>)}</datalist>
+                
+                {selectedPosition.productId && (
+                  <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100 flex flex-col gap-2">
+                     <div className="text-[10px] font-bold text-emerald-700 uppercase flex items-center gap-2">
+                       <Calculator size={14}/> Simulação Global (SKU: {selectedPosition.productId})
+                     </div>
+                     <div className="flex justify-between items-center text-sm">
+                        <div className="text-center">
+                           <span className="block text-[8px] text-slate-400 font-black">ATUAL</span>
+                           <span className="font-black text-slate-600 text-lg">{aggregatedInventory.find(i => i.id === selectedPosition.productId)?.total || 0}</span>
+                        </div>
+                        <Plus size={16} className="text-emerald-500"/>
+                        <div className="text-center">
+                           <span className="block text-[8px] text-emerald-600 font-black">ENTRANDO</span>
+                           <span className="font-black text-emerald-600 text-lg">{selectedPosition.quantity || 0}</span>
+                        </div>
+                        <ArrowRight size={16} className="text-slate-300"/>
+                        <div className="text-center">
+                           <span className="block text-[8px] text-slate-400 font-black">NOVO TOTAL</span>
+                           <span className="font-black text-slate-800 text-xl">{(aggregatedInventory.find(i => i.id === selectedPosition.productId)?.total || 0) + (selectedPosition.quantity || 0)}</span>
+                        </div>
+                     </div>
+                  </div>
+                )}
+
                 <input type="text" placeholder="DESCRIÇÃO DO PRODUTO" className="w-full p-5 bg-slate-50 rounded-2xl font-black uppercase outline-none" value={selectedPosition.productName} onChange={e => setSelectedPosition({...selectedPosition, productName: e.target.value.toUpperCase()})} required />
                 <input type="number" placeholder="QUANTIDADE" className="w-full p-5 bg-slate-50 rounded-2xl font-black text-center text-4xl outline-none" value={selectedPosition.quantity || ''} onChange={e => setSelectedPosition({...selectedPosition, quantity: parseInt(e.target.value) || 0})} required />
+                
                 <div className="grid grid-cols-2 gap-3 pt-2">
                    <button type="button" onClick={() => setSelectedPosition({...selectedPosition, slots: 1})} className={`p-4 rounded-2xl font-black uppercase text-[10px] border-2 transition-all ${selectedPosition.slots === 1 ? 'bg-indigo-600 text-white border-indigo-600 shadow-lg' : 'bg-slate-50 text-slate-400 border-transparent'}`}>Vaga Simples</button>
                    <button type="button" onClick={() => setSelectedPosition({...selectedPosition, slots: 2})} className={`p-4 rounded-2xl font-black uppercase text-[10px] border-2 transition-all ${selectedPosition.slots === 2 ? 'bg-indigo-600 text-white border-indigo-600 shadow-lg' : 'bg-slate-50 text-slate-400 border-transparent'}`}>Vaga Dupla</button>
@@ -760,22 +1020,6 @@ const App: React.FC = () => {
            </div>
         </div>
       )}
-      
-      {/* SCANNER E MODAIS DE QR */}
-      {isScannerOpen && <ScannerModal onScan={(text) => {
-        if (isProcessingAction) return;
-        const regex = /PP-([A-D])-P-(\d+)-L-(\d+)/i;
-        const match = text.match(regex);
-        if (match) { 
-          setIsScannerOpen(false); 
-          // Chama a função central de clique para decidir entre entrada ou saída baseado no inventário ATUAL
-          handlePositionClick(match[1], parseInt(match[3]), parseInt(match[2])); 
-        } else {
-          showFeedback('error', 'Código QR não reconhecido como endereço válido.');
-        }
-      }} onClose={() => setIsScannerOpen(false)} />}
-      
-      {showQR && <QRCodeModal position={showQR} onClose={() => setShowQR(null)} isOccupied={inventory.some(p => p.rack === showQR.rack && p.level === showQR.level && p.position === showQR.pos)} onManage={() => { handlePositionClick(showQR.rack, showQR.level, showQR.pos); setShowQR(null); }} />}
 
       {palletDetails && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[9000] flex items-center justify-center p-6" onClick={() => setPalletDetails(null)}>
@@ -798,33 +1042,75 @@ const App: React.FC = () => {
                   <span className="px-5 py-2 bg-indigo-600 text-white rounded-xl text-xs font-black shadow-md">{palletDetails.quantity} UN</span>
                 </div>
               </div>
-              <button 
-                disabled={isProcessingAction}
-                onClick={() => {
-                if(confirm("Confirmar BAIXA TOTAL deste item?")) {
-                  setIsProcessingAction(true);
-                  const opName = currentUser?.username || 'Sistema';
-                  deleteItemFromDB(FIXED_DB_STRING, palletDetails).then(() => {
-                    saveLogToDB(FIXED_DB_STRING, {
-                      username: opName,
-                      action: 'SAIDA',
-                      details: `BAIXA TOTAL: ${palletDetails.productId} (${palletDetails.quantity} UN)`,
-                      location: `${palletDetails.rack}${palletDetails.position}${LEVEL_LABELS[palletDetails.level-1]}`,
-                      timestamp: new Date().toISOString()
-                    });
-                    loadInitialData().then(() => {
-                      setPalletDetails(null); 
-                      showFeedback('success', 'Baixa realizada com sucesso!');
-                      setIsProcessingAction(false);
-                    });
-                  }).catch(() => {
-                    showFeedback('error', 'Falha ao realizar baixa.');
-                    setIsProcessingAction(false);
-                  });
-                }
-              }} className="w-full bg-rose-600 hover:bg-rose-700 text-white p-6 rounded-[2rem] font-black uppercase shadow-2xl active:scale-95 transition-all text-lg flex items-center justify-center gap-2">
-                {isProcessingAction ? <Loader2 className="animate-spin" /> : 'Realizar Baixa Total'}
-              </button>
+
+              {!isPartialExitMode ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <button 
+                    disabled={isProcessingAction}
+                    onClick={() => setIsPartialExitMode(true)}
+                    className="w-full bg-amber-500 hover:bg-amber-600 text-white p-6 rounded-[2rem] font-black uppercase shadow-xl active:scale-95 transition-all text-sm flex flex-col items-center justify-center gap-1 border-b-4 border-amber-700"
+                  >
+                    <PackageMinus size={24} />
+                    Saída Parcial
+                  </button>
+
+                  <button 
+                    disabled={isProcessingAction}
+                    onClick={handleTotalExit} 
+                    className="w-full bg-rose-600 hover:bg-rose-700 text-white p-6 rounded-[2rem] font-black uppercase shadow-xl active:scale-95 transition-all text-sm flex flex-col items-center justify-center gap-1 border-b-4 border-rose-800"
+                  >
+                    <PackageX size={24} />
+                    Baixa Total
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-amber-50 p-6 rounded-[2rem] border border-amber-200 animate-in slide-in-from-bottom duration-300">
+                  <h4 className="text-amber-600 font-black uppercase text-xs mb-4">Quantidade a retirar:</h4>
+                  <input 
+                    type="number" 
+                    autoFocus
+                    placeholder="QTD" 
+                    className="w-full p-4 bg-white border-2 border-amber-200 rounded-xl text-center font-black text-2xl outline-none focus:border-amber-500 text-slate-800 mb-4"
+                    value={partialQuantity}
+                    onChange={(e) => setPartialQuantity(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handlePartialExit();
+                    }}
+                  />
+
+                  {/* Calculadora Visual de Saldo Restante */}
+                  <div className="bg-white p-4 rounded-xl border border-amber-100 mb-4 flex flex-col gap-3">
+                     {/* Saldo Local */}
+                     <div>
+                       <span className="text-[8px] font-black uppercase text-indigo-400 mb-1 block">Nesta Posição:</span>
+                       <div className="flex justify-between items-center font-black text-sm bg-slate-50 p-2 rounded-lg">
+                         <span className="text-slate-600">{palletDetails.quantity}</span>
+                         <span className="text-rose-400">- {partialQuantity || 0}</span>
+                         <span className="text-slate-300">=</span>
+                         <span className={`text-lg ${(palletDetails.quantity - (parseInt(partialQuantity) || 0)) < 0 ? 'text-rose-500' : 'text-emerald-600'}`}>
+                           {Math.max(0, (palletDetails.quantity || 0) - (parseInt(partialQuantity) || 0))}
+                         </span>
+                       </div>
+                     </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button 
+                      onClick={() => { setIsPartialExitMode(false); setPartialQuantity(''); }}
+                      className="p-4 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-xl font-black uppercase text-[10px]"
+                    >
+                      Cancelar
+                    </button>
+                    <button 
+                      onClick={handlePartialExit}
+                      disabled={isProcessingAction}
+                      className="p-4 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg flex items-center justify-center gap-2"
+                    >
+                      {isProcessingAction ? <Loader2 className="animate-spin" size={14}/> : 'Confirmar'}
+                    </button>
+                  </div>
+                </div>
+              )}
            </div>
         </div>
       )}
