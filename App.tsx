@@ -41,10 +41,15 @@ const BLOCKED_LOCATIONS = [
 ];
 
 const App: React.FC = () => {
+  // ALTERAÇÃO: Usando sessionStorage para que o login expire ao fechar o navegador
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { return null; }
+    try {
+      const saved = sessionStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.error("Erro ao carregar sessão", e);
     }
     return null;
   });
@@ -197,7 +202,7 @@ const App: React.FC = () => {
       const user = await loginUserDB(FIXED_DB_STRING, loginData.user, loginData.pass);
       if (user) {
         setCurrentUser(user);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(user)); // USANDO SESSION STORAGE
         showFeedback('success', `Bem-vindo, ${user.username}!`);
       } else {
         showFeedback('error', 'Login ou senha incorretos.');
@@ -211,7 +216,7 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     setCurrentUser(null);
-    localStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(STORAGE_KEY); // USANDO SESSION STORAGE
     setIsMobileMenuOpen(false);
   };
 
