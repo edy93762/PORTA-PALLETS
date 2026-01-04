@@ -5,7 +5,7 @@ import {
   Package, Warehouse, X, ScanLine, Printer, Loader2, 
   ClipboardList, Trash2, Menu, AlertCircle, CheckCircle2, Search as SearchIcon, 
   QrCode, ArrowDownRight, ListChecks, History, LogOut, ArrowRightCircle, UserPlus, ShieldCheck, MapPin, Info, 
-  FileDown, PlusCircle, Filter
+  FileDown, PlusCircle, Filter, Save
 } from 'lucide-react';
 import { PalletPosition, RackId, MasterProduct, AppUser, ActivityLog } from './types';
 import { QRCodeModal } from './components/QRCodeModal';
@@ -60,6 +60,10 @@ const App: React.FC = () => {
   const [isPrintMenuOpen, setIsPrintMenuOpen] = useState(false);
   const [isLogsOpen, setIsLogsOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  
+  // Estado para o formulário de novo item (SKU)
+  const [isAddingNewSKU, setIsAddingNewSKU] = useState(false);
+  const [newSKUData, setNewSKUData] = useState({ id: '', name: '', qty: 0 });
   
   const [activeRack, setActiveRack] = useState<RackId>('A');
   const [activeLevelIndex, setActiveLevelIndex] = useState<number>(0); 
@@ -344,6 +348,31 @@ const App: React.FC = () => {
     }
   };
 
+  const handleAddNewMasterProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSKUData.id || !newSKUData.name) {
+      showFeedback('error', 'Preencha ID e Nome corretamente!');
+      return;
+    }
+    
+    setIsProcessingAction(true);
+    try {
+      await saveMasterProductToDB(FIXED_DB_STRING, {
+        productId: newSKUData.id.toUpperCase(),
+        productName: newSKUData.name.toUpperCase(),
+        standardQuantity: newSKUData.qty
+      });
+      await loadInitialData();
+      showFeedback('success', 'Item cadastrado com sucesso!');
+      setIsAddingNewSKU(false);
+      setNewSKUData({ id: '', name: '', qty: 0 });
+    } catch (error) {
+      showFeedback('error', 'Erro ao cadastrar novo SKU.');
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
   if (!currentUser) {
     return (
       <div className="fixed inset-0 bg-slate-900 flex items-center justify-center p-6 z-[9999]">
@@ -528,7 +557,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* OUTROS MODAIS */}
+      {/* BASE DE ITENS (REFORMULADO) */}
       {isMasterMenuOpen && (
         <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[8000] flex items-center justify-center p-0 lg:p-10" onClick={() => setIsMasterMenuOpen(false)}>
            <div className="bg-white rounded-none lg:rounded-[3rem] w-full max-w-4xl h-full lg:h-[85vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -539,25 +568,44 @@ const App: React.FC = () => {
                 </div>
                 <button onClick={() => setIsMasterMenuOpen(false)} className="p-4 bg-slate-100 rounded-2xl hover:bg-slate-200 transition-all"><X /></button>
               </header>
-              <div className="p-8 bg-slate-50 border-b flex flex-col md:flex-row gap-4 shrink-0">
-                <div className="relative flex-1">
-                  <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20}/>
-                  <input type="text" placeholder="BUSCAR POR SKU OU NOME..." className="w-full pl-12 p-4 bg-white border-2 border-slate-100 rounded-2xl font-black uppercase outline-none focus:border-indigo-600" value={masterSearchQuery} onChange={e => setMasterSearchQuery(e.target.value)} />
+
+              <div className="p-8 bg-slate-50 border-b flex flex-col gap-6 shrink-0">
+                <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                  <div className="relative flex-1 w-full">
+                    <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20}/>
+                    <input type="text" placeholder="BUSCAR POR SKU OU NOME..." className="w-full pl-12 p-4 bg-white border-2 border-slate-100 rounded-2xl font-black uppercase outline-none focus:border-indigo-600 transition-all shadow-sm" value={masterSearchQuery} onChange={e => setMasterSearchQuery(e.target.value)} />
+                  </div>
+                  <button onClick={() => setIsAddingNewSKU(!isAddingNewSKU)} className={`px-8 py-4 rounded-2xl font-black uppercase flex items-center gap-3 shadow-lg active:scale-95 transition-all w-full md:w-auto ${isAddingNewSKU ? 'bg-rose-500 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}>
+                    {isAddingNewSKU ? <X size={20}/> : <PlusCircle size={20}/>}
+                    {isAddingNewSKU ? 'Cancelar' : 'Novo Item'}
+                  </button>
                 </div>
-                <button onClick={() => {
-                  const id = prompt("Digite o ID do Produto (SKU):")?.toUpperCase();
-                  const name = prompt("Digite o Nome/Descrição:")?.toUpperCase();
-                  const qty = parseInt(prompt("Digite a Quantidade Padrão:") || "0");
-                  if(id && name) {
-                    saveMasterProductToDB(FIXED_DB_STRING, {productId: id, productName: name, standardQuantity: qty})
-                      .then(() => { loadInitialData(); showFeedback('success', 'SKU Cadastrado!'); });
-                  }
-                }} className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black uppercase flex items-center gap-3 shadow-lg hover:bg-indigo-700 active:scale-95 transition-all">
-                  <PlusCircle size={20}/> Novo Item
-                </button>
+
+                {isAddingNewSKU && (
+                  <form onSubmit={handleAddNewMasterProduct} className="bg-white p-8 rounded-[2rem] border-2 border-indigo-100 shadow-xl animate-in slide-in-from-top duration-300">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                      <div className="flex flex-col gap-2">
+                        <label className="text-[10px] font-black uppercase text-slate-400 ml-2">ID SKU (Único)</label>
+                        <input type="text" placeholder="EX: 102030" className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase border border-transparent focus:border-indigo-500 outline-none" value={newSKUData.id} onChange={e => setNewSKUData({...newSKUData, id: e.target.value})} required />
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Descrição Item</label>
+                        <input type="text" placeholder="NOME DO PRODUTO" className="w-full p-4 bg-slate-50 rounded-xl font-black uppercase border border-transparent focus:border-indigo-500 outline-none" value={newSKUData.name} onChange={e => setNewSKUData({...newSKUData, name: e.target.value})} required />
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Qtd. Padrão</label>
+                        <input type="number" placeholder="EX: 50" className="w-full p-4 bg-slate-50 rounded-xl font-black border border-transparent focus:border-indigo-500 outline-none" value={newSKUData.qty || ''} onChange={e => setNewSKUData({...newSKUData, qty: parseInt(e.target.value) || 0})} />
+                      </div>
+                    </div>
+                    <button type="submit" disabled={isProcessingAction} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-5 rounded-2xl font-black uppercase flex items-center justify-center gap-3 shadow-lg active:scale-95 transition-all">
+                      {isProcessingAction ? <Loader2 className="animate-spin" /> : <><Save size={20}/> Salvar Item na Base</>}
+                    </button>
+                  </form>
+                )}
               </div>
-              <div className="flex-1 overflow-y-auto p-8 space-y-3 no-scrollbar">
-                 {filteredMasterProducts.map(item => (
+
+              <div className="flex-1 overflow-y-auto p-8 space-y-3 no-scrollbar bg-slate-50/30">
+                 {filteredMasterProducts.length > 0 ? filteredMasterProducts.map(item => (
                    <div key={item.productId} className="bg-white p-6 rounded-[2rem] border-2 border-slate-50 shadow-sm flex items-center justify-between hover:border-indigo-100 transition-all group">
                      <div>
                        <span className="text-[10px] font-black text-indigo-500 uppercase block mb-1">SKU: {item.productId}</span>
@@ -565,12 +613,17 @@ const App: React.FC = () => {
                        <span className="text-[9px] font-bold text-slate-400 uppercase mt-2 block">Padrão: {item.standardQuantity} UN</span>
                      </div>
                      <button onClick={() => {
-                       if(confirm(`Excluir SKU ${item.productId}?`)) {
+                       if(confirm(`Excluir SKU ${item.productId} da base definitiva?`)) {
                          deleteMasterProductFromDB(FIXED_DB_STRING, item.productId).then(() => loadInitialData());
                        }
                      }} className="p-4 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-2xl transition-all opacity-0 group-hover:opacity-100"><Trash2 size={24}/></button>
                    </div>
-                 ))}
+                 )) : (
+                   <div className="flex flex-col items-center justify-center py-20 opacity-20">
+                     <ClipboardList size={64} className="mb-4" />
+                     <p className="font-black uppercase tracking-widest italic text-xs">Nenhum SKU encontrado</p>
+                   </div>
+                 )}
               </div>
            </div>
         </div>
@@ -711,7 +764,7 @@ const App: React.FC = () => {
       {/* SCANNER E MODAIS DE QR */}
       {isScannerOpen && <ScannerModal onScan={(text) => {
         if (isProcessingAction) return;
-        const regex = /PP-([A-D])-P-(\d+)-L-(\d+)/;
+        const regex = /PP-([A-D])-P-(\d+)-L-(\d+)/i;
         const match = text.match(regex);
         if (match) { 
           setIsScannerOpen(false); 

@@ -11,12 +11,20 @@ interface ScannerModalProps {
 export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) => {
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const containerId = "qr-reader-logistic-v2";
+  
+  // Refs para manter estado estável dentro do callback do scanner sem reiniciar o useEffect
+  const onScanRef = useRef(onScan);
+  const isProcessingRef = useRef(false);
+  
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
 
-  // Sistema de Beep Robusto usando Web Audio API
+  // Atualiza a referência da função onScan sempre que ela mudar no pai (sem reiniciar a câmera)
+  useEffect(() => {
+    onScanRef.current = onScan;
+  }, [onScan]);
+
   const playBeep = () => {
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -27,15 +35,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
       gainNode.connect(audioCtx.destination);
 
       oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime); // Tom mais agudo para ambientes ruidosos
+      oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime); 
       gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-      gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.01);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+      gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.05);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
 
       oscillator.start();
-      oscillator.stop(audioCtx.currentTime + 0.2);
+      oscillator.stop(audioCtx.currentTime + 0.25);
     } catch (e) {
-      console.warn("Falha no áudio:", e);
+      console.warn("Audio feedback error:", e);
     }
   };
 
@@ -47,7 +55,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
         }
         await scannerRef.current.clear();
       } catch (e) {
-        console.warn("Cleanup error:", e);
+        console.warn("Cleanup warning:", e);
       } finally {
         scannerRef.current = null;
       }
@@ -65,61 +73,65 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
         });
         setTorchOn(state);
       } catch (e) {
-        console.warn("Lanterna não suportada");
+        console.warn("Torch not supported");
       }
     }
   };
 
   useEffect(() => {
     let isMounted = true;
+    const elementId = containerId;
 
     const startScanner = async () => {
-      // Pequeno delay para garantir que o DOM ID exista
-      await new Promise(resolve => setTimeout(resolve, 400));
+      // Delay para garantir renderização do DOM
+      await new Promise(resolve => setTimeout(resolve, 300));
       if (!isMounted) return;
 
       try {
+        // Limpeza preventiva
         if (scannerRef.current) {
           try {
-            if (scannerRef.current.isScanning) await scannerRef.current.stop();
-            await scannerRef.current.clear();
-          } catch (e) { /* ignore cleanup errors */ }
+             if(scannerRef.current.isScanning) await scannerRef.current.stop();
+             await scannerRef.current.clear();
+          } catch(e) {}
         }
-        
-        scannerRef.current = new Html5Qrcode(containerId);
+
+        scannerRef.current = new Html5Qrcode(elementId);
 
         const config = { 
-          fps: 30, // Mais FPS = Detecção mais rápida
+          fps: 25, 
           qrbox: (viewWidth: number, viewHeight: number) => {
             const minSize = Math.min(viewWidth, viewHeight);
             const size = Math.floor(minSize * 0.7);
             return { width: size, height: size };
           },
           aspectRatio: 1.0,
+          disableFlip: false
         };
 
         const onScanSuccess = (decodedText: string) => {
-          if (isMounted && !isProcessing) {
-            setIsProcessing(true);
+          // Usa Ref para verificar processamento, evitando stale closures
+          if (isMounted && !isProcessingRef.current) {
+            isProcessingRef.current = true; // Bloqueia novas leituras imediatamente
             playBeep();
 
-            // Feedback Visual de Sucesso
-            const container = document.getElementById(containerId);
-            if (container) {
-              container.style.filter = 'invert(1) brightness(2)';
-              setTimeout(() => { if(container) container.style.filter = 'none'; }, 150);
+            // Feedback Visual
+            const videoEl = document.querySelector(`#${elementId} video`) as HTMLElement | null;
+            if (videoEl) {
+              videoEl.style.transition = 'filter 0.1s';
+              videoEl.style.filter = 'brightness(2.5) contrast(1.5)';
             }
             
-            // Finaliza após o feedback
+            // Pausa e envia o resultado
             setTimeout(() => {
-              if (isMounted) onScan(decodedText);
-            }, 250);
+              if (isMounted) {
+                onScanRef.current(decodedText);
+              }
+            }, 300);
           }
         };
 
-        // Estratégia de inicialização robusta:
-        // 1. Tenta usar facingMode diretamente (funciona melhor em mobile sem labels de câmera)
-        // 2. Se falhar, busca câmeras disponíveis e tenta a primeira da lista
+        // Tentativa 1: facingMode environment (padrão moderno)
         try {
           await scannerRef.current.start(
             { facingMode: "environment" }, 
@@ -127,29 +139,30 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
             onScanSuccess, 
             () => {}
           );
-        } catch (e) {
-          console.warn("Falha ao iniciar com facingMode: environment, tentando fallback...", e);
+        } catch (err) {
+          console.warn("Facing mode failed, trying device ID enumeration...", err);
+          // Tentativa 2: Enumeração manual (fallback para Androids antigos/específicos)
           const devices = await Html5Qrcode.getCameras();
           if (devices && devices.length > 0) {
-            // Se houver câmeras, tenta a última (geralmente a traseira em muitos dispositivos)
-            const cameraId = devices[devices.length - 1].id;
+            // Tenta pegar a câmera traseira pela label ou a última da lista
+            const backCam = devices.find(d => /back|rear|traseira|environment/i.test(d.label)) || devices[devices.length - 1];
             await scannerRef.current.start(
-              cameraId, 
+              backCam.id, 
               config, 
               onScanSuccess, 
               () => {}
             );
           } else {
-            throw new Error("Nenhuma câmera encontrada no dispositivo.");
+            throw new Error("Nenhuma câmera detectada.");
           }
         }
         
         if (isMounted) setIsInitializing(false);
 
       } catch (err: any) {
-        console.error("Scanner V2 Error:", err);
+        console.error("Critical Scanner Error:", err);
         if (isMounted) {
-          setErrorMsg(err.message || "Erro ao acessar a câmera. Verifique as permissões.");
+          setErrorMsg("Câmera indisponível. Verifique permissões ou se outro app a está usando.");
           setIsInitializing(false);
         }
       }
@@ -163,33 +176,33 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
         scannerRef.current.stop().then(() => scannerRef.current?.clear()).catch(() => {});
       }
     };
-  }, [onScan]);
+  }, []); // Dependência vazia: A câmera só inicializa UMA vez na montagem do componente
 
   return (
-    <div className="fixed inset-0 bg-black z-[9999] flex flex-col overflow-hidden animate-in fade-in duration-500">
+    <div className="fixed inset-0 bg-black z-[9999] flex flex-col overflow-hidden animate-in fade-in duration-300">
       
-      {/* HEADER DO SCANNER */}
-      <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-center z-[100] bg-gradient-to-b from-black/80 to-transparent">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-[0_0_20px_rgba(79,70,229,0.5)] animate-pulse">
-            <Scan size={24} />
+      {/* HEADER */}
+      <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-center z-[100] bg-gradient-to-b from-black/90 to-transparent">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg animate-pulse">
+            <Scan size={20} />
           </div>
           <div className="flex flex-col">
-            <span className="text-white font-black text-sm uppercase tracking-widest italic">Lente de Fluxo</span>
-            <span className="text-indigo-400 text-[10px] font-bold uppercase tracking-tighter">Detecção em tempo real ativa</span>
+            <span className="text-white font-black text-xs uppercase tracking-widest italic">Leitor Ativo</span>
+            <span className="text-white/50 text-[9px] font-bold uppercase">Aponte para o QR</span>
           </div>
         </div>
         
-        <div className="flex gap-2">
+        <div className="flex gap-3">
           <button 
             onClick={toggleTorch}
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all border ${torchOn ? 'bg-amber-500 text-white border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.4)]' : 'bg-white/10 text-white border-white/20 hover:bg-white/20'}`}
+            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all border ${torchOn ? 'bg-amber-500 text-white border-amber-400' : 'bg-white/10 text-white border-white/20'}`}
           >
             <Zap size={20} fill={torchOn ? "currentColor" : "none"} />
           </button>
           <button 
             onClick={stopAndClose} 
-            className="w-12 h-12 bg-rose-600/20 hover:bg-rose-600/40 backdrop-blur-xl border border-rose-500/30 rounded-2xl flex items-center justify-center text-rose-500 transition-all shadow-xl active:scale-90"
+            className="w-12 h-12 bg-rose-600/20 backdrop-blur-md border border-rose-500/30 rounded-2xl flex items-center justify-center text-rose-500 active:scale-95"
           >
             <X size={24} strokeWidth={3} />
           </button>
@@ -197,86 +210,53 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
       </div>
 
       <div className="relative flex-1 bg-black flex items-center justify-center">
-        {/* Container HTML5-QRCode */}
         <div id={containerId} className="w-full h-full [&_video]:object-cover"></div>
 
-        {/* MOLDURA DE LOGÍSTICA */}
-        {!isInitializing && !errorMsg && (
+        {/* HUD DE LEITURA */}
+        {!isInitializing && !errorMsg && !isProcessingRef.current && (
           <div className="absolute inset-0 pointer-events-none z-20 flex flex-col items-center justify-center">
-            <div className="relative w-[75vw] h-[75vw] max-w-[320px] max-h-[320px]">
-              {/* Sombras externas para focar o centro */}
-              <div className="absolute inset-[-1000px] shadow-[0_0_0_1000px_rgba(0,0,0,0.7)] rounded-[2.5rem]"></div>
+            <div className="relative w-[70vw] h-[70vw] max-w-[280px] max-h-[280px]">
+              <div className="absolute inset-[-1000px] bg-black/50 [mask-image:radial-gradient(transparent_30%,black_70%)]"></div>
               
-              {/* Cantoneiras HUD */}
-              <div className="absolute top-0 left-0 w-14 h-14 border-t-4 border-l-4 border-indigo-500 rounded-tl-[2rem]"></div>
-              <div className="absolute top-0 right-0 w-14 h-14 border-t-4 border-r-4 border-indigo-500 rounded-tr-[2rem]"></div>
-              <div className="absolute bottom-0 left-0 w-14 h-14 border-b-4 border-l-4 border-indigo-500 rounded-bl-[2rem]"></div>
-              <div className="absolute bottom-0 right-0 w-14 h-14 border-b-4 border-r-4 border-indigo-500 rounded-br-[2rem]"></div>
+              {/* Cantos */}
+              <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-500 rounded-tl-xl"></div>
+              <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 rounded-tr-xl"></div>
+              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 rounded-bl-xl"></div>
+              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 rounded-br-xl"></div>
               
-              {/* Linha de Scan Ativa */}
-              <div className="w-full h-1 bg-indigo-400 shadow-[0_0_20px_rgba(79,70,229,1)] absolute top-0 animate-[logistic-scan_3s_infinite] opacity-60"></div>
+              {/* Laser */}
+              <div className="w-full h-0.5 bg-indigo-400 shadow-[0_0_15px_rgba(99,102,241,1)] absolute top-1/2 -translate-y-1/2 animate-[pulse_2s_infinite]"></div>
             </div>
             
-            <div className="mt-16 px-8 py-4 bg-indigo-600/20 backdrop-blur-xl rounded-[2rem] border border-indigo-500/30 flex flex-col items-center shadow-2xl">
-              <p className="text-white font-black uppercase italic tracking-[0.25em] text-[10px] text-center mb-1">Aguardando QR Endereço</p>
-              <span className="text-indigo-300 text-[8px] font-bold uppercase tracking-widest opacity-60">Padrão: PP-R-P-X-L-X</span>
+            <div className="mt-12 bg-black/60 backdrop-blur-md px-6 py-2 rounded-full border border-white/10">
+              <span className="text-white text-[10px] font-black uppercase tracking-widest">Aguardando Código</span>
             </div>
           </div>
         )}
 
-        {/* LOADING STATE */}
+        {isProcessingRef.current && (
+           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+             <Loader2 className="w-16 h-16 text-indigo-500 animate-spin" />
+           </div>
+        )}
+
         {isInitializing && (
-          <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center gap-6 z-[90]">
-            <div className="w-24 h-24 relative flex items-center justify-center">
-              <div className="absolute inset-0 border-4 border-indigo-500/10 rounded-full"></div>
-              <div className="absolute inset-0 border-t-4 border-indigo-500 rounded-full animate-spin"></div>
-              <Camera className="text-indigo-500 animate-pulse" size={32} />
-            </div>
-            <div className="flex flex-col items-center">
-              <span className="text-white font-black uppercase text-[12px] tracking-[0.4em] mb-2">Sincronizando Lente</span>
-              <span className="text-white/20 text-[9px] font-bold uppercase tracking-widest">Iniciando hardware de captura...</span>
-            </div>
+          <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center z-50">
+            <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
+            <span className="text-white/50 text-[10px] uppercase tracking-widest font-black">Iniciando Câmera...</span>
           </div>
         )}
 
-        {/* ERROR STATE */}
         {errorMsg && (
-          <div className="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center p-10 text-center z-[95]">
-            <div className="bg-rose-500/5 p-12 rounded-[4rem] border-2 border-rose-500/20 max-w-sm flex flex-col items-center shadow-2xl">
-              <div className="w-20 h-20 bg-rose-500/10 rounded-3xl flex items-center justify-center text-rose-500 mb-8">
-                <AlertTriangle size={40} />
-              </div>
-              <h4 className="font-black text-white uppercase italic text-xl mb-4 tracking-tighter">Hardware Bloqueado</h4>
-              <p className="text-rose-200/50 font-bold text-[11px] uppercase leading-relaxed mb-10 tracking-wide px-4">
-                {errorMsg}
-              </p>
-              <button 
-                onClick={stopAndClose} 
-                className="w-full bg-rose-600 hover:bg-rose-700 text-white py-6 rounded-[2rem] font-black text-xs uppercase shadow-[0_10px_30px_rgba(225,29,72,0.3)] transition-all active:scale-95"
-              >
-                Voltar ao Painel
-              </button>
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900 p-8">
+            <div className="text-center">
+              <AlertTriangle className="w-16 h-16 text-rose-500 mx-auto mb-4" />
+              <p className="text-white font-bold mb-6">{errorMsg}</p>
+              <button onClick={stopAndClose} className="bg-rose-600 text-white px-8 py-3 rounded-xl font-black uppercase text-xs">Fechar</button>
             </div>
           </div>
         )}
       </div>
-
-      <style>{`
-        @keyframes logistic-scan {
-          0% { top: 0%; opacity: 0; }
-          10% { opacity: 1; }
-          90% { opacity: 1; }
-          100% { top: 100%; opacity: 0; }
-        }
-        #qr-reader-logistic-v2__dashboard { display: none !important; }
-        #qr-reader-logistic-v2 video { 
-          width: 100% !important; 
-          height: 100% !important; 
-          object-fit: cover !important;
-          transition: filter 0.2s ease;
-        }
-        #qr-reader-logistic-v2 { border: none !important; background: transparent !important; }
-      `}</style>
     </div>
   );
 };
