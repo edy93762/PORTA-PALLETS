@@ -78,9 +78,16 @@ export const initializeDatabase = async (connectionString: string) => {
 export const cleanupOldLogs = async (connectionString: string) => {
   const pool = getPool(connectionString);
   try {
-    await pool.query(`DELETE FROM ${LOGS_TABLE} WHERE CAST(timestamp AS TIMESTAMP) < (CURRENT_TIMESTAMP - INTERVAL '30 days')`);
+    // Calcula a data de 30 dias atrás via JS para garantir formato ISO correto
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 30);
+    const isoCutoff = cutoffDate.toISOString();
+
+    // Compara strings ISO diretamente (lexicograficamente seguro)
+    // Isso é mais robusto que casting no banco dependendo da versão/configuração
+    await pool.query(`DELETE FROM ${LOGS_TABLE} WHERE timestamp < $1`, [isoCutoff]);
   } catch (err) {
-    console.warn("Falha ao limpar logs:", err);
+    console.warn("Falha ao limpar logs antigos:", err);
   } finally {
     await pool.end();
   }

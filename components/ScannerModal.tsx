@@ -141,26 +141,44 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
           );
         } catch (err) {
           console.warn("Facing mode failed, trying device ID enumeration...", err);
+          
           // Tentativa 2: Enumeração manual (fallback para Androids antigos/específicos)
-          const devices = await Html5Qrcode.getCameras();
-          if (devices && devices.length > 0) {
-            // Tenta pegar a câmera traseira pela label ou a última da lista
-            const backCam = devices.find(d => /back|rear|traseira|environment/i.test(d.label)) || devices[devices.length - 1];
-            await scannerRef.current.start(
-              backCam.id, 
-              config, 
-              onScanSuccess, 
-              () => {}
-            );
-          } else {
-            throw new Error("Nenhuma câmera detectada.");
+          try {
+            const devices = await Html5Qrcode.getCameras();
+            if (devices && devices.length > 0) {
+              // Tenta pegar a câmera traseira pela label ou a última da lista (comumente traseira)
+              const backCam = devices.find(d => /back|rear|traseira|environment/i.test(d.label)) || devices[devices.length - 1];
+              
+              await scannerRef.current.start(
+                backCam.id, 
+                config, 
+                onScanSuccess, 
+                () => {}
+              );
+            } else {
+              throw new Error("Nenhuma câmera detectada.");
+            }
+          } catch (err2) {
+             console.error("Critical Scanner Error (Fallback):", err2);
+             // Se falhar ao especificar ID, tenta qualquer câmera disponível sem constraints
+             const devices = await Html5Qrcode.getCameras();
+             if (devices && devices.length > 0) {
+                 await scannerRef.current.start(
+                   devices[0].id, 
+                   config, 
+                   onScanSuccess, 
+                   () => {}
+                 );
+             } else {
+                 throw err2;
+             }
           }
         }
         
         if (isMounted) setIsInitializing(false);
 
       } catch (err: any) {
-        console.error("Critical Scanner Error:", err);
+        console.error("Critical Scanner Error (Final):", err);
         if (isMounted) {
           setErrorMsg("Câmera indisponível. Verifique permissões ou se outro app a está usando.");
           setIsInitializing(false);
