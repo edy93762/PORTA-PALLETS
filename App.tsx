@@ -116,6 +116,9 @@ const App: React.FC = () => {
   const [isPrintingBatch, setIsPrintingBatch] = useState(false);
   const [printFilter, setPrintFilter] = useState<'all' | 'free'>('all');
 
+  // Estado para geração de lote FLOOR
+  const [floorBatchQty, setFloorBatchQty] = useState<string>('1');
+
   const loadInitialData = useCallback(async () => {
     try {
       const [inv, masters, history] = await Promise.all([
@@ -168,6 +171,12 @@ const App: React.FC = () => {
   useEffect(() => {
     if (palletDetails && palletDetails.rack !== 'FLOOR') {
       const codeValue = `PP-${palletDetails.rack}-P-${palletDetails.position}-L-${palletDetails.level}`;
+      QRCode.toDataURL(codeValue, { width: 200, margin: 1 }, (err, url) => {
+        if (!err) setPalletDetailsQrUrl(url);
+      });
+    } else if (palletDetails && palletDetails.rack === 'FLOOR') {
+      // Gera QR Code visual para Floor também, usando o ID
+      const codeValue = `PP-FLOOR-ID-${palletDetails.id}`;
       QRCode.toDataURL(codeValue, { width: 200, margin: 1 }, (err, url) => {
         if (!err) setPalletDetailsQrUrl(url);
       });
@@ -278,36 +287,54 @@ const App: React.FC = () => {
 
   // Handle QR Scan
   const handleQrScan = (decodedText: string) => {
-    // Formato esperado: PP-RACK-P-POS-L-LEVEL (ex: PP-A-P-1-L-1)
-    const regex = /PP-([A-D])-P-(\d+)-L-(\d+)/;
-    const match = decodedText.match(regex);
+    // Formato RACK: PP-RACK-P-POS-L-LEVEL (ex: PP-A-P-1-L-1)
+    const rackMatch = decodedText.match(/PP-([A-D])-P-(\d+)-L-(\d+)/);
+    // Formato FLOOR (Novo): PP-FLOOR-ID-{STRING}
+    const floorMatch = decodedText.match(/PP-FLOOR-ID-(.+)/);
 
-    if (match) {
-      const rack = match[1] as RackId;
-      const pos = parseInt(match[2]);
-      const level = parseInt(match[3]);
+    if (rackMatch) {
+      const rack = rackMatch[1] as RackId;
+      const pos = parseInt(rackMatch[2]);
+      const level = parseInt(rackMatch[3]);
 
       const item = inventory.find(i => i.rack === rack && i.position === pos && i.level === level);
       
-      setIsScannerOpen(false); // Fecha o scanner
+      setIsScannerOpen(false); 
       
       if (item) {
-        // Se ocupado, abre detalhes E LIBERA ACESSO DE OPERADOR
         setIsAccessViaScanner(true);
         setPalletDetails(item);
         showFeedback('success', 'Código reconhecido! Acesso liberado.');
       } else {
-        // Se vazio, abre entrada (apenas se admin, ou se quisermos liberar entrada por scan tbm)
-        if (currentUser?.role === 'admin') {
-           setSelectedPosition({ 
-             id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`, 
-             rack, level, position: pos, 
-             productId: '', productName: '', quantity: 0, slots: 1 
-           });
-           showFeedback('success', 'Posição Livre. Iniciando entrada.');
-        } else {
-           showFeedback('error', 'Posição Livre. Apenas Admins podem dar entrada.');
-        }
+        setSelectedPosition({ 
+          id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`, 
+          rack, level, position: pos, 
+          productId: '', productName: '', quantity: 0, slots: 1 
+        });
+        showFeedback('success', 'Etiqueta Livre Bipada. Iniciando entrada.');
+      }
+    } else if (floorMatch) {
+      // Logica para etiqueta de chão dinâmica
+      const uniqueId = floorMatch[1];
+      const item = inventory.find(i => i.id === uniqueId);
+      
+      setIsScannerOpen(false);
+
+      if (item) {
+         // Se já existe no inventário, mostra detalhes/saída
+         setIsAccessViaScanner(true);
+         setPalletDetails(item);
+         showFeedback('success', 'Pallet de Chão Identificado.');
+      } else {
+         // Se não existe, é uma etiqueta virgem/livre -> Nova Entrada
+         setSelectedPosition({ 
+            id: uniqueId, 
+            rack: 'FLOOR', 
+            level: 0, 
+            position: 0, 
+            productId: '', productName: '', quantity: 0, slots: 1 
+         });
+         showFeedback('success', 'Etiqueta de Chão Livre. Iniciando entrada.');
       }
     } else {
       showFeedback('error', 'Código QR Inválido ou não reconhecido.');
@@ -697,8 +724,9 @@ const App: React.FC = () => {
       setSelectedPosition(null);
     } 
     else { 
+      // CLIQUE MANUAL CONTINUA RESTRITO A ADMIN
       if (currentUser?.role !== 'admin') {
-         showFeedback('error', 'Apenas ADMINISTRADORES podem realizar entradas manuais.');
+         showFeedback('error', 'Apenas ADMINISTRADORES podem realizar entradas manuais (clique). Use o SCANNER.');
          return;
       }
       setSelectedPosition({ 
@@ -771,6 +799,41 @@ const App: React.FC = () => {
       }
     } catch (e) {
       showFeedback('error', 'Falha ao gerar lote.');
+    } finally {
+      setIsPrintingBatch(false);
+    }
+  };
+
+  const generateFloorBatch = async () => {
+    setIsPrintingBatch(true);
+    try {
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [50, 50] });
+      const qty = Math.max(1, Math.min(50, parseInt(floorBatchQty) || 1));
+
+      for (let i = 0; i < qty; i++) {
+          if (i > 0) doc.addPage([50, 50], 'portrait');
+          
+          // Unique ID per label
+          const uniqueId = `FLOOR-${Date.now()}-${i}`;
+          const codeValue = `PP-FLOOR-ID-${uniqueId}`;
+          
+          doc.setLineWidth(0.1);
+          doc.rect(1, 1, 48, 48);
+          
+          const qrDataUrl = await QRCode.toDataURL(codeValue, { errorCorrectionLevel: 'H', width: 200, margin: 0 });
+          doc.addImage(qrDataUrl, 'PNG', 7.5, 8, 35, 35);
+          
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(10);
+          doc.text("PALLET CHÃO", 25, 6, { align: "center" });
+          
+          doc.setFontSize(6);
+          doc.text(uniqueId, 25, 47, { align: "center" });
+      }
+      doc.save(`Etiquetas_Chao_Lote_${qty}.pdf`);
+      showFeedback('success', `${qty} Etiquetas geradas!`);
+    } catch(e) {
+      showFeedback('error', 'Erro ao gerar PDF');
     } finally {
       setIsPrintingBatch(false);
     }
@@ -1479,7 +1542,25 @@ const App: React.FC = () => {
                   <h3 className="font-black text-xl md:text-2xl italic uppercase text-slate-800">Pallets Externos (Chão)</h3>
                 </div>
                 
-                <div className="flex gap-2 w-full md:w-auto">
+                <div className="flex gap-2 w-full md:w-auto items-center">
+                  <div className="bg-slate-100 p-2 rounded-2xl flex items-center gap-2">
+                     <span className="text-[10px] font-black uppercase text-slate-400 pl-2">Qtd Etiquetas:</span>
+                     <input 
+                        type="number" 
+                        min="1" 
+                        max="50" 
+                        className="w-12 p-2 bg-white rounded-xl text-center font-black text-sm outline-none"
+                        value={floorBatchQty}
+                        onChange={(e) => setFloorBatchQty(e.target.value)}
+                     />
+                     <button 
+                        onClick={generateFloorBatch}
+                        disabled={isPrintingBatch}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-sm"
+                     >
+                        {isPrintingBatch ? <Loader2 className="animate-spin" size={14}/> : <><Printer size={14}/> Gerar Lote</>}
+                     </button>
+                  </div>
                   {currentUser?.role === 'admin' && (
                     <button 
                       onClick={() => {
@@ -1496,9 +1577,9 @@ const App: React.FC = () => {
                         });
                         setIsExternalMenuOpen(false); // Fecha este menu para mostrar o de entrada
                       }}
-                      className="flex-1 md:flex-none px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-md"
+                      className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-md"
                     >
-                      <PackagePlus size={16}/> Nova Entrada Manual
+                      <PackagePlus size={16}/> Entrada Manual
                     </button>
                   )}
                   <button onClick={() => setIsExternalMenuOpen(false)} className="p-4 bg-white rounded-2xl hover:bg-amber-100 transition-all"><X /></button>
@@ -1522,13 +1603,17 @@ const App: React.FC = () => {
                                 }} className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-indigo-600 hover:text-white transition-all"><Info size={18}/></button>
                                 <button onClick={async () => {
                                    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [50, 50] });
-                                   const codeValue = `PP-FLOOR-P-${item.position}-L-0`;
+                                   // Para itens existentes, usa o ID salvo se for Floor, ou posição se for Rack (mas aqui é só Floor)
+                                   const codeValue = `PP-FLOOR-ID-${item.id}`;
+                                   doc.setLineWidth(0.1);
                                    doc.rect(1, 1, 48, 48);
                                    const qrDataUrl = await QRCode.toDataURL(codeValue, { errorCorrectionLevel: 'H', width: 200, margin: 0 });
                                    doc.addImage(qrDataUrl, 'PNG', 7.5, 8, 35, 35);
-                                   doc.setFontSize(8);
-                                   doc.text("PALLET EXTERNO", 25, 6, { align: "center" });
-                                   doc.text(item.productName?.substring(0,15) || '', 25, 45, { align: "center" });
+                                   doc.setFont("helvetica", "bold");
+                                   doc.setFontSize(10);
+                                   doc.text("PALLET CHÃO", 25, 6, { align: "center" });
+                                   doc.setFontSize(6);
+                                   doc.text(item.id, 25, 47, { align: "center" });
                                    doc.save(`Externo_${item.productId}.pdf`);
                                 }} className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-800 hover:text-white transition-all"><Printer size={18}/></button>
                              </div>
@@ -1682,7 +1767,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* BASE DE ITENS (MASTER PRODUCTS) - RESTORED */}
+      {/* BASE DE ITENS (MASTER PRODUCTS) */}
       {isMasterMenuOpen && (
         <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[9000] flex items-end sm:items-center justify-center p-0 sm:p-4 lg:p-10" onClick={() => setIsMasterMenuOpen(false)}>
            <div className="bg-white w-full max-w-4xl h-[90vh] sm:h-full lg:h-[85vh] rounded-t-[2rem] sm:rounded-[3rem] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -1729,7 +1814,7 @@ const App: React.FC = () => {
                              <button onClick={async () => {
                                 if(confirm("Excluir item da base? O histórico será mantido.")){
                                     await deleteMasterProductFromDB(FIXED_DB_STRING, item.productId);
-                                    loadInitialData();
+                                    loadInitialData(); // Using the generic loader
                                 }
                              }} className="p-3 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-600 hover:text-white transition-all"><Trash2 size={18}/></button>
                            </div>
@@ -1801,7 +1886,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* SALDO GERAL (INVENTORY REPORT) - RESTORED */}
+      {/* SALDO GERAL (INVENTORY REPORT) */}
       {isInventoryReportOpen && (
         <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[9000] flex items-end sm:items-center justify-center p-0 sm:p-4 lg:p-10" onClick={() => setIsInventoryReportOpen(false)}>
            <div className="bg-white w-full max-w-5xl h-[90vh] sm:h-full lg:h-[85vh] rounded-t-[2rem] sm:rounded-[3rem] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
