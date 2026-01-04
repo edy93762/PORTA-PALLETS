@@ -14,6 +14,7 @@ const getPool = (connectionString: string) => {
 export const initializeDatabase = async (connectionString: string) => {
   const pool = getPool(connectionString);
   try {
+    // Adiciona a coluna created_at se não existir (para migração suave)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ${TABLE_NAME} (
         id TEXT PRIMARY KEY,
@@ -24,9 +25,17 @@ export const initializeDatabase = async (connectionString: string) => {
         product_name TEXT,
         quantity INTEGER DEFAULT 0,
         slots INTEGER DEFAULT 1,
-        last_updated TEXT
+        last_updated TEXT,
+        created_at TEXT
       );
     `);
+    
+    // Tenta adicionar a coluna created_at caso a tabela já exista sem ela
+    try {
+        await pool.query(`ALTER TABLE ${TABLE_NAME} ADD COLUMN IF NOT EXISTS created_at TEXT`);
+    } catch (e) {
+        // Ignora erro se coluna já existe
+    }
 
     // Tabela master_products com nomes exatos da imagem (product_id, product_name, standard_quantity)
     await pool.query(`
@@ -87,6 +96,25 @@ export const loginUserDB = async (connectionString: string, user: string, pass: 
   }
 };
 
+export const fetchAllUsersFromDB = async (connectionString: string): Promise<AppUser[]> => {
+  const pool = getPool(connectionString);
+  try {
+    const { rows } = await pool.query(`SELECT username, role, created_at FROM ${USERS_TABLE} ORDER BY username ASC`);
+    return rows;
+  } finally {
+    await pool.end();
+  }
+};
+
+export const updateUserRoleInDB = async (connectionString: string, username: string, newRole: 'admin' | 'operator') => {
+  const pool = getPool(connectionString);
+  try {
+    await pool.query(`UPDATE ${USERS_TABLE} SET role = $1 WHERE username = $2`, [newRole, username]);
+  } finally {
+    await pool.end();
+  }
+};
+
 export const saveUserToDB = async (connectionString: string, user: AppUser) => {
   const pool = getPool(connectionString);
   try {
@@ -135,7 +163,8 @@ export const fetchInventoryFromDB = async (connectionString: string): Promise<Pa
       productName: row.product_name || '',
       quantity: Number(row.quantity || 0),
       slots: Number(row.slots || 1),
-      lastUpdated: row.last_updated
+      lastUpdated: row.last_updated,
+      createdAt: row.created_at || row.last_updated // Fallback se não tiver created_at
     }));
   } finally {
     await pool.end();
@@ -185,16 +214,23 @@ export const deleteMasterProductFromDB = async (connectionString: string, produc
 export const saveItemToDB = async (connectionString: string, item: PalletPosition) => {
   const pool = getPool(connectionString);
   try {
+    // created_at deve ser preservado se já existir. Se for novo insert, usa o valor passado ou data atual.
+    // Usamos uma lógica de ON CONFLICT que preserva o created_at original se ele existir na tabela
+    
+    const now = new Date().toISOString();
+    const createdAt = item.createdAt || now;
+
     await pool.query(`
-      INSERT INTO ${TABLE_NAME} (id, rack, level, position, product_id, product_name, quantity, slots, last_updated)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO ${TABLE_NAME} (id, rack, level, position, product_id, product_name, quantity, slots, last_updated, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (id) DO UPDATE SET 
         product_id = EXCLUDED.product_id,
         product_name = EXCLUDED.product_name,
         quantity = EXCLUDED.quantity,
         slots = EXCLUDED.slots,
         last_updated = EXCLUDED.last_updated;
-    `, [item.id, item.rack, item.level, item.position, item.productId, item.productName, item.quantity, item.slots, item.lastUpdated]);
+        -- NÃO atualizamos created_at no conflito para manter o FIFO
+    `, [item.id, item.rack, item.level, item.position, item.productId, item.productName, item.quantity, item.slots, item.lastUpdated, createdAt]);
   } finally {
     await pool.end();
   }

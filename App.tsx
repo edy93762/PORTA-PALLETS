@@ -4,7 +4,7 @@ import {
   Package, Warehouse, X, ScanLine, Printer, Loader2, 
   ClipboardList, Trash2, Menu, AlertCircle, CheckCircle2, Search as SearchIcon, 
   QrCode, ArrowDownRight, ListChecks, History, LogOut, ArrowRightCircle, UserPlus, ShieldCheck, MapPin, Info, 
-  FileDown, PlusCircle, Filter, Save, PackageMinus, PackageX, Ban, Calculator, Plus, ArrowRight, Minus, Calendar, User
+  FileDown, PlusCircle, Filter, Save, PackageMinus, PackageX, Ban, Calculator, Plus, ArrowRight, Minus, Calendar, User, Users, ShieldAlert, PackagePlus, Pencil, LayoutGrid, Clock, AlertTriangle, ArrowUpAZ, ArrowRightToLine
 } from 'lucide-react';
 import { PalletPosition, RackId, MasterProduct, AppUser, ActivityLog } from './types';
 import { QRCodeModal } from './components/QRCodeModal';
@@ -21,7 +21,9 @@ import {
   saveUserToDB,
   saveLogToDB,
   fetchLogsFromDB,
-  cleanupOldLogs
+  cleanupOldLogs,
+  fetchAllUsersFromDB,
+  updateUserRoleInDB
 } from './services/neonService';
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
@@ -65,21 +67,49 @@ const App: React.FC = () => {
   const [isLogsOpen, setIsLogsOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   
-  // Estado para o formulário de novo item (SKU)
+  // Novos Menus
+  const [isExternalMenuOpen, setIsExternalMenuOpen] = useState(false); // Pallets Externos (FLOOR)
+  const [isFIFOMenuOpen, setIsFIFOMenuOpen] = useState(false); // Consulta FIFO
+
+  // Estado para Gestão de Usuários (Admin)
+  const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
+  const [allUsers, setAllUsers] = useState<AppUser[]>([]);
+
+  // Estado para o formulário de novo item (SKU) e Edição
   const [isAddingNewSKU, setIsAddingNewSKU] = useState(false);
   const [newSKUData, setNewSKUData] = useState({ id: '', name: '', qty: 0 });
+  const [editingProduct, setEditingProduct] = useState<MasterProduct | null>(null);
   
   const [activeRack, setActiveRack] = useState<RackId>('A');
   const [activeLevelIndex, setActiveLevelIndex] = useState<number>(0); 
+  
+  // Estado para Entrada Manual (Vaga Vazia ou Floor)
   const [selectedPosition, setSelectedPosition] = useState<PalletPosition | null>(null);
+  const [manualEntryData, setManualEntryData] = useState({ sku: '', qty: '' });
+
   const [palletDetails, setPalletDetails] = useState<PalletPosition | null>(null);
   
+  // Estado para Entrada Automática (Bulk)
+  const [isBulkEntryOpen, setIsBulkEntryOpen] = useState(false);
+  const [bulkEntryPriority, setBulkEntryPriority] = useState<string>('DEFAULT'); // Prioridade: DEFAULT, RACK_A, RACK_B..., PICKING
+  
+  // Novo estado para prioridade de posição (Start of aisle priority)
+  const [bulkPosRange, setBulkPosRange] = useState({ enabled: false, end: 26 });
+
+  const [bulkEntryData, setBulkEntryData] = useState({ 
+    productId: '', 
+    totalQuantity: 0,
+    calculated: false,
+    results: [] as { type: 'FULL' | 'PARTIAL', qty: number, location: string, rack: string, level: number, pos: number }[]
+  });
+
   // Estados para Saída Parcial
   const [isPartialExitMode, setIsPartialExitMode] = useState(false);
   const [partialQuantity, setPartialQuantity] = useState<string>('');
 
   const [showQR, setShowQR] = useState<{ rack: string; level: number; pos: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [fifoSearchQuery, setFifoSearchQuery] = useState('');
   const [masterSearchQuery, setMasterSearchQuery] = useState('');
   const [isPrintingBatch, setIsPrintingBatch] = useState(false);
   const [printFilter, setPrintFilter] = useState<'all' | 'free'>('all');
@@ -100,6 +130,17 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const loadUsersData = useCallback(async () => {
+    if (currentUser?.role === 'admin') {
+      try {
+        const users = await fetchAllUsersFromDB(FIXED_DB_STRING);
+        setAllUsers(users);
+      } catch (e) {
+        showFeedback('error', 'Erro ao carregar lista de usuários');
+      }
+    }
+  }, [currentUser]);
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -114,6 +155,12 @@ const App: React.FC = () => {
     const interval = setInterval(loadInitialData, 15000);
     return () => clearInterval(interval);
   }, [loadInitialData]);
+
+  useEffect(() => {
+    if (isUserManagementOpen) {
+      loadUsersData();
+    }
+  }, [isUserManagementOpen, loadUsersData]);
 
   const showFeedback = (type: 'success' | 'error', msg: string) => {
     setFeedback({ type, msg });
@@ -156,7 +203,7 @@ const App: React.FC = () => {
       const newUser = {
         username: loginData.user.trim().toLowerCase(),
         password: loginData.pass,
-        role: 'operator'
+        role: 'operator' // Por padrão, todo novo registro é operador
       };
       await saveUserToDB(FIXED_DB_STRING, newUser);
       showFeedback('success', 'Usuário cadastrado! Já pode entrar.');
@@ -169,6 +216,250 @@ const App: React.FC = () => {
     }
   };
 
+  const handleUpdateRole = async (targetUser: AppUser) => {
+    if (currentUser?.role !== 'admin') return;
+    if (targetUser.username === currentUser.username) {
+        showFeedback('error', 'Você não pode alterar seu próprio cargo.');
+        return;
+    }
+    const newRole = targetUser.role === 'admin' ? 'operator' : 'admin';
+    const actionText = newRole === 'admin' ? 'PROMOVER para Admin' : 'REBAIXAR para Operador';
+    if (confirm(`Deseja ${actionText} o usuário ${targetUser.username}?`)) {
+        try {
+            await updateUserRoleInDB(FIXED_DB_STRING, targetUser.username, newRole);
+            await loadUsersData(); 
+            showFeedback('success', `Cargo de ${targetUser.username} alterado para ${newRole}.`);
+        } catch (e) {
+            showFeedback('error', 'Erro ao atualizar cargo.');
+        }
+    }
+  };
+
+  // Função auxiliar para verificar ocupação
+  const checkOccupancy = useCallback((rack: RackId, level: number, pos: number) => {
+    return inventory.some(i => 
+      (i.rack === rack && i.level === level && i.position === pos) || 
+      (i.rack === rack && i.level === level && i.position === pos - 1 && i.slots === 2)
+    );
+  }, [inventory]);
+
+  // Encontra a próxima vaga livre em todos os Racks
+  const findNextFreeSpot = useCallback(() => {
+    for (const rack of RACKS) {
+       for (let level = 1; level <= LEVEL_LABELS.length; level++) {
+         for (let pos = 1; pos <= POSITIONS_PER_LEVEL; pos++) {
+            // Pula bloqueados
+            const isBlocked = BLOCKED_LOCATIONS.some(b => b.rack === rack && b.level === level && b.positions.includes(pos));
+            if (isBlocked) continue;
+            
+            // Verifica ocupação
+            if (!checkOccupancy(rack, level, pos)) {
+              return { rack, level, pos };
+            }
+         }
+       }
+    }
+    return null; // Nenhuma vaga encontrada
+  }, [checkOccupancy]);
+
+  // Handler para submeter entrada manual
+  const handleManualEntrySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPosition) return;
+    
+    // Validação básica
+    if (!manualEntryData.sku || !manualEntryData.qty) {
+       showFeedback('error', 'Preencha SKU e Quantidade!');
+       return;
+    }
+
+    const qty = parseInt(manualEntryData.qty);
+    if (qty <= 0) {
+        showFeedback('error', 'Quantidade inválida!');
+        return;
+    }
+
+    setIsProcessingAction(true);
+    const opName = currentUser?.username || 'Sistema';
+    const masterItem = masterProducts.find(m => m.productId === manualEntryData.sku);
+
+    try {
+        const newItem = {
+            ...selectedPosition,
+            productId: manualEntryData.sku,
+            productName: masterItem?.productName || 'PRODUTO NÃO CADASTRADO',
+            quantity: qty,
+            slots: 1, // Default to 1 slot for manual entry
+            lastUpdated: new Date().toISOString(),
+            createdAt: new Date().toISOString()
+        };
+
+        await saveItemToDB(FIXED_DB_STRING, newItem);
+        await saveLogToDB(FIXED_DB_STRING, {
+            username: opName,
+            action: 'ENTRADA',
+            details: `ENTRADA MANUAL: ${newItem.productId} (${qty} UN)`,
+            location: newItem.rack === 'FLOOR' ? 'EXTERNO (CHÃO)' : newItem.id,
+            timestamp: new Date().toISOString()
+        });
+
+        await loadInitialData();
+        showFeedback('success', 'Entrada realizada com sucesso!');
+        setSelectedPosition(null);
+        setManualEntryData({ sku: '', qty: '' });
+    } catch (e) {
+        showFeedback('error', 'Erro ao salvar entrada.');
+    } finally {
+        setIsProcessingAction(false);
+    }
+  };
+
+  // ---- LÓGICA DE CÁLCULO DE PALLETS (ENTRADA INTELIGENTE) ----
+  const handleCalculateBulkEntry = () => {
+     if (!bulkEntryData.productId || bulkEntryData.totalQuantity <= 0) {
+       showFeedback('error', 'Selecione um SKU e uma quantidade válida.');
+       return;
+     }
+
+     const masterItem = masterProducts.find(m => m.productId === bulkEntryData.productId);
+     if (!masterItem || !masterItem.standardQuantity) {
+       showFeedback('error', 'Item sem quantidade padrão cadastrada. Cadastre na Base de Itens primeiro.');
+       return;
+     }
+
+     const stdQty = masterItem.standardQuantity;
+     const total = bulkEntryData.totalQuantity;
+     const fullPalletsCount = Math.floor(total / stdQty);
+     const remainder = total % stdQty;
+
+     // Sugere vagas
+     let tempInventory = [...inventory]; // Cópia para simular ocupação durante o loop
+     const results = [];
+
+     // Função interna para checar ocupação simulada
+     const isSpotTaken = (r, l, p) => tempInventory.some(i => 
+       (i.rack === r && i.level === l && i.position === p) ||
+       (i.rack === r && i.level === l && i.position === p - 1 && i.slots === 2)
+     ) || BLOCKED_LOCATIONS.some(b => b.rack === r && b.level === l && b.positions.includes(p));
+
+     // Define a ordem de busca baseada na prioridade escolhida
+     const getSearchPhases = () => {
+        const allRacks = ['A', 'B', 'C', 'D'];
+        const allLevels = [1, 2, 3, 4, 5];
+
+        if (bulkEntryPriority === 'PICKING') {
+           // Prioridade Picking: Busca em todos os racks, níveis 1 e 2 primeiro. Depois 3 a 5.
+           return [
+             { racks: allRacks, levels: [1, 2] },
+             { racks: allRacks, levels: [3, 4, 5] }
+           ];
+        }
+
+        let orderedRacks = [...allRacks];
+        if (bulkEntryPriority === 'RACK_B') orderedRacks = ['B', 'A', 'C', 'D'];
+        else if (bulkEntryPriority === 'RACK_C') orderedRacks = ['C', 'A', 'B', 'D'];
+        else if (bulkEntryPriority === 'RACK_D') orderedRacks = ['D', 'A', 'B', 'C'];
+        // Default (A) ou Rack A
+        
+        return [{ racks: orderedRacks, levels: allLevels }];
+     };
+
+     const findSpot = () => {
+        const phases = getSearchPhases();
+        
+        // Define as passadas de posição:
+        // Se prioridade de posição ativada: 1ª passada = 1 até limit. 2ª passada = limit+1 até max.
+        // Se desativada: 1ª passada = 1 até max.
+        const positionRuns = bulkPosRange.enabled 
+           ? [{ min: 1, max: bulkPosRange.end }, { min: bulkPosRange.end + 1, max: POSITIONS_PER_LEVEL }]
+           : [{ min: 1, max: POSITIONS_PER_LEVEL }];
+
+        // Itera sobre as passadas de posição (ex: Prioritário, depois Resto)
+        for (const run of positionRuns) {
+           // Itera sobre as fases de Rack/Nível (ex: Rack A, depois B...)
+           for (const phase of phases) {
+             for (const rack of phase.racks) {
+                for (const level of phase.levels) {
+                  for (let pos = run.min; pos <= run.max; pos++) {
+                     if (!isSpotTaken(rack, level, pos)) return { rack, level, pos };
+                  }
+                }
+             }
+           }
+        }
+        return null;
+     };
+
+     // Aloca Pallets Cheios
+     for (let i = 0; i < fullPalletsCount; i++) {
+        const spot = findSpot();
+        if (spot) {
+           results.push({ type: 'FULL', qty: stdQty, location: `${spot.rack}${spot.pos}${LEVEL_LABELS[spot.level-1]}`, ...spot });
+           tempInventory.push({ id: 'temp', ...spot, slots: 1 }); // Marca ocupado temporariamente
+        } else {
+           results.push({ type: 'FULL', qty: stdQty, location: 'EXTERNO (CHÃO)', rack: 'FLOOR', level: 0, pos: 0 });
+        }
+     }
+
+     // Aloca Sobra
+     if (remainder > 0) {
+        const spot = findSpot();
+        if (spot) {
+           results.push({ type: 'PARTIAL', qty: remainder, location: `${spot.rack}${spot.pos}${LEVEL_LABELS[spot.level-1]}`, ...spot });
+        } else {
+           results.push({ type: 'PARTIAL', qty: remainder, location: 'EXTERNO (CHÃO)', rack: 'FLOOR', level: 0, pos: 0 });
+        }
+     }
+
+     setBulkEntryData({ ...bulkEntryData, calculated: true, results });
+  };
+
+  const confirmBulkEntry = async () => {
+    setIsProcessingAction(true);
+    const opName = currentUser?.username || 'Sistema';
+    const masterItem = masterProducts.find(m => m.productId === bulkEntryData.productId);
+    
+    try {
+      for (const item of bulkEntryData.results) {
+        const isFloor = item.rack === 'FLOOR';
+        const id = isFloor ? `FLOOR-${Date.now()}-${Math.random().toString(36).substr(2,5)}` : `${item.rack}${item.pos}${LEVEL_LABELS[item.level-1]}`;
+        
+        await saveItemToDB(FIXED_DB_STRING, {
+          id: id,
+          rack: item.rack,
+          level: item.level,
+          position: item.pos || 0, // Floor usa 0 ou incrementa
+          productId: bulkEntryData.productId,
+          productName: masterItem?.productName || 'DESCONHECIDO',
+          quantity: item.qty,
+          slots: 1,
+          lastUpdated: new Date().toISOString(),
+          createdAt: new Date().toISOString() // IMPORTANTE: FIFO
+        });
+
+        await saveLogToDB(FIXED_DB_STRING, {
+          username: opName,
+          action: 'ENTRADA',
+          details: `ENTRADA AUTO: ${bulkEntryData.productId} (${item.qty} UN) - ${item.type === 'FULL' ? 'PALLET CHEIO' : 'QUEBRA'}`,
+          location: isFloor ? 'EXTERNO (CHÃO)' : id,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      await loadInitialData();
+      showFeedback('success', 'Entrada em massa realizada com sucesso!');
+      setIsBulkEntryOpen(false);
+      setBulkEntryData({ productId: '', totalQuantity: 0, calculated: false, results: [] });
+      setBulkEntryPriority('DEFAULT');
+
+    } catch (e) {
+      showFeedback('error', 'Erro ao salvar entrada em massa.');
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+  // -----------------------------------------------------------
+
   const stats = useMemo(() => {
     // Calcula o total de posições bloqueadas para subtrair do total
     let blockedCount = 0;
@@ -177,12 +468,16 @@ const App: React.FC = () => {
     });
 
     const totalRaw = RACKS.length * LEVEL_LABELS.length * POSITIONS_PER_LEVEL;
-    const total = totalRaw - blockedCount; // Capacidade real utilizável
+    const total = totalRaw - blockedCount; 
     
-    const occupied = inventory.length;
-    const free = total - occupied;
-    const rate = total > 0 ? ((occupied / total) * 100).toFixed(1) : 0;
-    return { total, occupied, free, rate };
+    // Calcula ocupação real considerando vagas duplas ocupando 2 espaços
+    // Filtra FLOOR para não contar na ocupação do rack
+    const rackInventory = inventory.filter(i => i.rack !== 'FLOOR');
+    const occupiedCount = rackInventory.reduce((acc, item) => acc + (item.slots || 1), 0);
+
+    const free = Math.max(0, total - occupiedCount);
+    const rate = total > 0 ? ((occupiedCount / total) * 100).toFixed(1) : 0;
+    return { total, occupied: occupiedCount, free, rate };
   }, [inventory]);
 
   const aggregatedInventory = useMemo(() => {
@@ -190,7 +485,7 @@ const App: React.FC = () => {
     inventory.forEach(item => {
       if (!item.productId) return;
       const ex = map.get(item.productId);
-      const loc = `${item.rack}${item.position}${LEVEL_LABELS[item.level - 1]}`;
+      const loc = item.rack === 'FLOOR' ? 'EXTERNO' : `${item.rack}${item.position}${LEVEL_LABELS[item.level - 1]}`;
       if (ex) { 
         ex.total += (item.quantity || 0); 
         ex.locs.push(loc); 
@@ -209,6 +504,34 @@ const App: React.FC = () => {
     return result;
   }, [inventory, searchQuery]);
 
+  // Lógica FIFO: Filtra e ordena inventário
+  // ATUALIZAÇÃO: Prioridade Absoluta para FLOOR, depois data.
+  const fifoFilteredInventory = useMemo(() => {
+    if (!fifoSearchQuery) return [];
+    const q = fifoSearchQuery.toUpperCase();
+    
+    // 1. Filtra itens
+    const items = inventory.filter(i => 
+      (i.productId && i.productId.toUpperCase().includes(q)) || 
+      (i.productName && i.productName.toUpperCase().includes(q))
+    );
+
+    // 2. Ordena: PRIMEIRO 'FLOOR', DEPOIS DATA (FIFO)
+    return items.sort((a, b) => {
+       const isFloorA = a.rack === 'FLOOR';
+       const isFloorB = b.rack === 'FLOOR';
+
+       // Se um é floor e o outro não, floor ganha
+       if (isFloorA && !isFloorB) return -1;
+       if (!isFloorA && isFloorB) return 1;
+
+       // Se ambos são iguais (ambos floor ou ambos rack), usa data
+       const dateA = new Date(a.createdAt || a.lastUpdated || 0).getTime();
+       const dateB = new Date(b.createdAt || b.lastUpdated || 0).getTime();
+       return dateA - dateB;
+    });
+  }, [inventory, fifoSearchQuery]);
+
   const filteredMasterProducts = useMemo(() => {
     if (!masterSearchQuery) return masterProducts;
     const q = masterSearchQuery.toUpperCase();
@@ -224,7 +547,6 @@ const App: React.FC = () => {
       const pos = p;
       const currentLevel = activeLevelIndex + 1;
 
-      // Verifica se é uma posição bloqueada (Pilar/Estrutura)
       const isBlocked = BLOCKED_LOCATIONS.some(b => 
         b.rack === activeRack && 
         b.level === currentLevel && 
@@ -294,7 +616,7 @@ const App: React.FC = () => {
   };
 
   const handlePositionClick = (rack: RackId, level: number, pos: number) => {
-    // Verifica se é posição bloqueada antes de interagir
+    // Verifica se é posição bloqueada
     const isBlocked = BLOCKED_LOCATIONS.some(b => 
       b.rack === rack && 
       b.level === level && 
@@ -305,22 +627,22 @@ const App: React.FC = () => {
       return;
     }
 
-    // Busca SEMPRE no estado de inventário mais recente
     const occ = inventory.find(p => p.rack === rack && p.level === level && p.position === pos);
     const isTail = inventory.find(p => p.rack === rack && p.level === level && p.position === (pos - 1) && p.slots === 2);
     const target = occ || isTail;
     
-    // Resetar estados de parciais ao abrir
     setIsPartialExitMode(false);
     setPartialQuantity('');
 
     if (target) { 
-      // Se tiver item: Abre Detalhes/Saída
       setPalletDetails({ ...target }); 
       setSelectedPosition(null);
     } 
     else { 
-      // Se estiver vazio: Abre Entrada
+      if (currentUser?.role !== 'admin') {
+         showFeedback('error', 'Apenas ADMINISTRADORES podem realizar entradas manuais.');
+         return;
+      }
       setSelectedPosition({ 
         id: `${rack}${pos}${LEVEL_LABELS[level - 1]}`, 
         rack, 
@@ -335,6 +657,19 @@ const App: React.FC = () => {
     }
   };
 
+  const handleAddToStock = () => {
+    if (!palletDetails) return;
+    if (currentUser?.role !== 'admin') {
+         showFeedback('error', 'Apenas ADMINISTRADORES podem adicionar estoque.');
+         return;
+    }
+    setSelectedPosition({
+        ...palletDetails,
+        quantity: 0 
+    });
+    setPalletDetails(null);
+  };
+
   const generateBatchPDF = async () => {
     setIsPrintingBatch(true);
     try {
@@ -343,7 +678,6 @@ const App: React.FC = () => {
       
       let pagesAdded = 0;
       for (let p = 1; p <= POSITIONS_PER_LEVEL; p++) {
-        // Pula posições bloqueadas na impressão também
         const isBlocked = BLOCKED_LOCATIONS.some(b => 
           b.rack === activeRack && 
           b.level === currentLevel && 
@@ -351,7 +685,7 @@ const App: React.FC = () => {
         );
         if (isBlocked) continue;
 
-        const isOccupied = inventory.some(item => item.rack === activeRack && item.level === currentLevel && item.position === p);
+        const isOccupied = checkOccupancy(activeRack, currentLevel, p);
         if (printFilter === 'free' && isOccupied) continue;
 
         const labelText = `${activeRack} ${p} ${LEVEL_LABELS[activeLevelIndex]}`;
@@ -431,6 +765,23 @@ const App: React.FC = () => {
     }
   };
 
+  const handleUpdateMasterProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct) return;
+    
+    setIsProcessingAction(true);
+    try {
+        await saveMasterProductToDB(FIXED_DB_STRING, editingProduct);
+        await loadInitialData();
+        showFeedback('success', 'Produto atualizado com sucesso!');
+        setEditingProduct(null);
+    } catch (error) {
+        showFeedback('error', 'Erro ao atualizar produto.');
+    } finally {
+        setIsProcessingAction(false);
+    }
+  };
+
   const handleDownloadReport = () => {
     const doc = new jsPDF();
     doc.setFont("helvetica", "bold");
@@ -483,7 +834,7 @@ const App: React.FC = () => {
           username: opName,
           action: 'SAIDA',
           details: `BAIXA TOTAL: ${palletDetails.productId} (${palletDetails.quantity} UN)`,
-          location: `${palletDetails.rack}${palletDetails.position}${LEVEL_LABELS[palletDetails.level-1]}`,
+          location: `${palletDetails.rack === 'FLOOR' ? 'EXTERNO' : palletDetails.rack + palletDetails.position}`,
           timestamp: new Date().toISOString()
         });
         await loadInitialData();
@@ -516,7 +867,6 @@ const App: React.FC = () => {
       return;
     }
 
-    // Removido confirm() nativo para evitar bloqueios em mobile. O botão na UI já serve como confirmação.
     setIsProcessingAction(true);
     const opName = currentUser?.username || 'Sistema';
     const newQuantity = (palletDetails.quantity || 0) - qtdToRemove;
@@ -532,7 +882,7 @@ const App: React.FC = () => {
           username: opName,
           action: 'SAIDA',
           details: `SAIDA PARCIAL: ${palletDetails.productId} (-${qtdToRemove} UN). RESTAM: ${newQuantity}`,
-          location: `${palletDetails.rack}${palletDetails.position}${LEVEL_LABELS[palletDetails.level-1]}`,
+          location: `${palletDetails.rack === 'FLOOR' ? 'EXTERNO' : palletDetails.rack + palletDetails.position}`,
           timestamp: new Date().toISOString()
         });
         await loadInitialData();
@@ -596,12 +946,26 @@ const App: React.FC = () => {
             <button onClick={() => { setIsPrintMenuOpen(true); setIsMobileMenuOpen(false); }} className="flex items-center gap-4 p-4 text-slate-600 font-black uppercase text-[11px] hover:bg-indigo-50 hover:text-indigo-600 rounded-2xl transition-all text-left w-full"><Printer size={20}/> ETIQUETAS</button>
             <button onClick={() => { setIsMasterMenuOpen(true); setIsMobileMenuOpen(false); }} className="flex items-center gap-4 p-4 text-slate-600 font-black uppercase text-[11px] hover:bg-indigo-50 hover:text-indigo-600 rounded-2xl transition-all text-left w-full"><ClipboardList size={20}/> BASE ITENS</button>
             <button onClick={() => { setIsInventoryReportOpen(true); setIsMobileMenuOpen(false); }} className="flex items-center gap-4 p-4 text-slate-600 font-black uppercase text-[11px] hover:bg-indigo-50 hover:text-indigo-600 rounded-2xl transition-all text-left w-full"><ListChecks size={20}/> SALDO GERAL</button>
+            <button onClick={() => { setIsExternalMenuOpen(true); setIsMobileMenuOpen(false); }} className="flex items-center gap-4 p-4 text-slate-600 font-black uppercase text-[11px] hover:bg-indigo-50 hover:text-indigo-600 rounded-2xl transition-all text-left w-full"><LayoutGrid size={20}/> PALLETS EXTERNOS</button>
+            <button onClick={() => { setIsFIFOMenuOpen(true); setIsMobileMenuOpen(false); }} className="flex items-center gap-4 p-4 text-slate-600 font-black uppercase text-[11px] hover:bg-indigo-50 hover:text-indigo-600 rounded-2xl transition-all text-left w-full"><Clock size={20}/> EXPEDIÇÃO (FIFO)</button>
             <button onClick={() => { setIsLogsOpen(true); setIsMobileMenuOpen(false); }} className="flex items-center gap-4 p-4 text-slate-600 font-black uppercase text-[11px] hover:bg-indigo-50 hover:text-indigo-600 rounded-2xl transition-all text-left w-full"><History size={20}/> HISTÓRICO</button>
+            
+            {/* Menu Apenas para Admins */}
+            {currentUser?.role === 'admin' && (
+              <button onClick={() => { setIsUserManagementOpen(true); setIsMobileMenuOpen(false); }} className="flex items-center gap-4 p-4 text-indigo-600 bg-indigo-50 border border-indigo-100 font-black uppercase text-[11px] hover:bg-indigo-100 rounded-2xl transition-all text-left w-full mt-4">
+                 <Users size={20}/> GESTÃO USUÁRIOS
+              </button>
+            )}
           </nav>
           <div className="pt-6 border-t border-slate-100">
-            <div className="mb-4 px-4 py-3 bg-slate-50 rounded-xl border">
-              <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">Operador</span>
-              <span className="text-xs font-black text-indigo-600 uppercase">{currentUser?.username || 'Sistema'}</span>
+            <div className="mb-4 px-4 py-3 bg-slate-50 rounded-xl border flex justify-between items-center">
+              <div>
+                <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">Operador</span>
+                <span className="text-xs font-black text-indigo-600 uppercase">{currentUser?.username || 'Sistema'}</span>
+              </div>
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md uppercase ${currentUser?.role === 'admin' ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
+                {currentUser?.role === 'admin' ? 'ADMIN' : 'OP'}
+              </span>
             </div>
             <button onClick={handleLogout} className="flex items-center gap-4 p-4 text-rose-500 font-black uppercase text-[11px] hover:bg-rose-50 rounded-2xl transition-all w-full"><LogOut size={20}/> SAIR</button>
           </div>
@@ -619,17 +983,22 @@ const App: React.FC = () => {
 
         <div className="flex-1 overflow-y-auto p-6 lg:p-8 space-y-8 no-scrollbar">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-            <div className="flex-shrink-0">
+            <div className="flex-shrink-0 flex gap-4">
               <button onClick={() => setIsScannerOpen(true)} className="bg-indigo-600 text-white px-10 py-5 rounded-full font-black uppercase shadow-xl flex items-center gap-4 active:scale-95 transition-all">
-                <ScanLine size={28}/> SCANNER RÁPIDO
+                <ScanLine size={28}/> SCANNER
               </button>
+              {currentUser?.role === 'admin' && (
+                <button onClick={() => setIsBulkEntryOpen(true)} className="bg-emerald-600 text-white px-10 py-5 rounded-full font-black uppercase shadow-xl flex items-center gap-4 active:scale-95 transition-all">
+                  <PackagePlus size={28}/> ENTRADA
+                </button>
+              )}
             </div>
             
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 flex-1 max-w-4xl">
                <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center"><span className="text-2xl font-black block leading-none">{stats.total}</span><span className="text-[9px] font-bold text-slate-400 uppercase mt-1">Capacidade</span></div>
-               <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center"><span className="text-2xl font-black block text-rose-600 leading-none">{stats.occupied}</span><span className="text-[9px] font-bold text-slate-400 uppercase mt-1">Ocupado</span></div>
-               <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center"><span className="text-2xl font-black block text-emerald-600 leading-none">{stats.free}</span><span className="text-[9px] font-bold text-slate-400 uppercase mt-1">Livre</span></div>
-               <div className="bg-indigo-600 p-6 rounded-[2rem] text-white shadow-xl flex flex-col justify-center"><span className="text-2xl font-black block leading-none">{stats.rate}%</span><span className="text-[9px] font-bold text-white/60 uppercase mt-1">Uso</span></div>
+               <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center"><span className="text-2xl font-black block text-rose-600 leading-none">{stats.occupied}</span><span className="text-[9px] font-bold text-slate-400 uppercase mt-1">Ocupado Rack</span></div>
+               <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center"><span className="text-2xl font-black block text-emerald-600 leading-none">{stats.free}</span><span className="text-[9px] font-bold text-slate-400 uppercase mt-1">Livre Rack</span></div>
+               <div className="bg-indigo-600 p-6 rounded-[2rem] text-white shadow-xl flex flex-col justify-center"><span className="text-2xl font-black block leading-none">{stats.rate}%</span><span className="text-[9px] font-bold text-white/60 uppercase mt-1">Uso Rack</span></div>
             </div>
           </div>
 
@@ -649,6 +1018,322 @@ const App: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* MODAL ENTRADA AUTOMÁTICA (BULK) */}
+      {isBulkEntryOpen && (
+        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[9000] flex items-center justify-center p-0 lg:p-10" onClick={() => setIsBulkEntryOpen(false)}>
+           <div className="bg-white rounded-none lg:rounded-[3rem] w-full max-w-2xl p-10 shadow-2xl overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <h3 className="font-black text-2xl italic uppercase text-indigo-600 mb-8">Entrada Inteligente</h3>
+              
+              {!bulkEntryData.calculated ? (
+                <div className="space-y-6">
+                   <div>
+                     <label className="block text-xs font-black uppercase text-slate-400 mb-2">Selecione o Item (SKU)</label>
+                     <input list="sku-list-bulk" className="w-full p-5 bg-slate-50 rounded-2xl font-black uppercase border-2 border-transparent focus:border-indigo-600 outline-none" 
+                       value={bulkEntryData.productId}
+                       onChange={e => setBulkEntryData({...bulkEntryData, productId: e.target.value.toUpperCase()})}
+                     />
+                     <datalist id="sku-list-bulk">{masterProducts.map(m => <option key={m.productId} value={m.productId}>{m.productName}</option>)}</datalist>
+                   </div>
+                   
+                   <div>
+                     <label className="block text-xs font-black uppercase text-slate-400 mb-2">Quantidade Total a Lançar</label>
+                     <input type="number" className="w-full p-5 bg-slate-50 rounded-2xl font-black text-3xl outline-none"
+                       value={bulkEntryData.totalQuantity || ''}
+                       onChange={e => setBulkEntryData({...bulkEntryData, totalQuantity: parseInt(e.target.value) || 0})}
+                     />
+                   </div>
+
+                   <div>
+                     <label className="block text-xs font-black uppercase text-slate-400 mb-2 flex items-center gap-2"><ArrowUpAZ size={14}/> Prioridade de Rack / Nível</label>
+                     <select 
+                        className="w-full p-5 bg-slate-50 rounded-2xl font-black uppercase outline-none border-2 border-transparent focus:border-indigo-600 appearance-none"
+                        value={bulkEntryPriority}
+                        onChange={(e) => setBulkEntryPriority(e.target.value)}
+                     >
+                        <option value="DEFAULT">Sequência Padrão (Rack A → D)</option>
+                        <option value="PICKING">Priorizar Níveis Baixos (Picking 1-2)</option>
+                        <option value="RACK_A">Priorizar Rack A</option>
+                        <option value="RACK_B">Priorizar Rack B</option>
+                        <option value="RACK_C">Priorizar Rack C</option>
+                        <option value="RACK_D">Priorizar Rack D</option>
+                     </select>
+
+                     {/* Nova Seção de Prioridade de Faixa (Posição) */}
+                     <div className="flex items-center gap-3 mt-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                        <div className="flex items-center gap-3 flex-1">
+                            <input 
+                              type="checkbox" 
+                              id="posPriority"
+                              className="w-5 h-5 rounded-md accent-indigo-600"
+                              checked={bulkPosRange.enabled}
+                              onChange={e => setBulkPosRange({...bulkPosRange, enabled: e.target.checked})}
+                            />
+                            <label htmlFor="posPriority" className="font-black text-[10px] uppercase text-slate-600 cursor-pointer flex items-center gap-1">
+                               <ArrowRightToLine size={14}/> Priorizar Início do Corredor (Frente)
+                            </label>
+                        </div>
+                        
+                        {bulkPosRange.enabled && (
+                          <div className="flex items-center gap-2 animate-in slide-in-from-left">
+                            <span className="text-[9px] font-bold uppercase text-slate-400">Até a Posição:</span>
+                            <input 
+                              type="number" 
+                              className="w-16 p-2 bg-white border border-slate-200 rounded-lg text-center font-black text-sm outline-none focus:border-indigo-500"
+                              value={bulkPosRange.end}
+                              onChange={e => setBulkPosRange({...bulkPosRange, end: Math.min(POSITIONS_PER_LEVEL, Math.max(1, parseInt(e.target.value) || 1))})}
+                            />
+                          </div>
+                        )}
+                     </div>
+                   </div>
+
+                   <button onClick={handleCalculateBulkEntry} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black uppercase text-lg hover:bg-indigo-700 transition-all shadow-lg flex items-center justify-center gap-2">
+                     <Calculator size={20} /> Calcular Pallets & Vagas
+                   </button>
+                </div>
+              ) : (
+                <div className="space-y-6 animate-in slide-in-from-right">
+                   <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100">
+                      <div className="flex justify-between items-center mb-4">
+                        <span className="font-black text-indigo-600 text-lg">Resultado do Cálculo</span>
+                        <button onClick={() => setBulkEntryData({...bulkEntryData, calculated: false})} className="text-xs font-bold text-slate-400 hover:text-indigo-500 uppercase">Refazer</button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4 text-center">
+                         <div className="bg-white p-4 rounded-xl shadow-sm">
+                            <span className="block text-2xl font-black text-slate-800">{bulkEntryData.results.filter(r => r.type === 'FULL').length}</span>
+                            <span className="text-[10px] font-black uppercase text-slate-400">Pallets Completos</span>
+                         </div>
+                         <div className="bg-white p-4 rounded-xl shadow-sm">
+                            <span className="block text-2xl font-black text-slate-800">{bulkEntryData.results.filter(r => r.type === 'PARTIAL').length}</span>
+                            <span className="text-[10px] font-black uppercase text-slate-400">Quebra (Sobras)</span>
+                         </div>
+                      </div>
+                   </div>
+
+                   <div className="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+                      <h4 className="text-xs font-black uppercase text-slate-400 mb-2">Sugestão de Armazenagem</h4>
+                      {bulkEntryData.results.map((res, i) => (
+                        <div key={i} className={`p-4 rounded-xl border flex justify-between items-center ${res.location.includes('CHÃO') ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                           <div className="flex items-center gap-3">
+                              {res.location.includes('CHÃO') ? <AlertTriangle className="text-amber-500" size={18}/> : <CheckCircle2 className="text-emerald-500" size={18}/>}
+                              <span className="font-bold text-sm text-slate-700">{res.type === 'FULL' ? 'PALLET' : 'SOBRA'} - {res.qty} UN</span>
+                           </div>
+                           <span className="font-black text-sm uppercase bg-white px-3 py-1 rounded-lg shadow-sm">{res.location}</span>
+                        </div>
+                      ))}
+                   </div>
+
+                   <button onClick={confirmBulkEntry} disabled={isProcessingAction} className="w-full py-5 bg-emerald-600 text-white rounded-2xl font-black uppercase text-lg hover:bg-emerald-700 transition-all shadow-lg flex items-center justify-center gap-2">
+                     {isProcessingAction ? <Loader2 className="animate-spin"/> : 'Confirmar e Gerar Etiquetas'}
+                   </button>
+                </div>
+              )}
+           </div>
+        </div>
+      )}
+
+      {/* MODAL EXPEDIÇÃO (FIFO) */}
+      {isFIFOMenuOpen && (
+        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[8000] flex items-center justify-center p-0 lg:p-10" onClick={() => setIsFIFOMenuOpen(false)}>
+          <div className="bg-white rounded-none lg:rounded-[3rem] w-full max-w-5xl h-full lg:h-[85vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+            <header className="p-8 border-b flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-blue-600 text-white rounded-2xl shadow-lg"><Clock size={24}/></div>
+                <h3 className="font-black text-2xl italic uppercase text-slate-800">Consulta de Expedição (FIFO)</h3>
+              </div>
+              <button onClick={() => setIsFIFOMenuOpen(false)} className="p-4 bg-slate-100 rounded-2xl hover:bg-slate-200 transition-all"><X /></button>
+            </header>
+
+            <div className="p-6 bg-slate-50 border-b flex items-center gap-4 shrink-0">
+               <div className="relative flex-1">
+                  <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20}/>
+                  <input type="text" placeholder="DIGITE O NOME OU SKU DO ITEM..." className="w-full pl-12 p-4 bg-white border-2 border-slate-200 rounded-2xl font-black uppercase outline-none focus:border-blue-600 transition-all shadow-sm" value={fifoSearchQuery} onChange={e => setFifoSearchQuery(e.target.value)} />
+               </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-8 space-y-4 bg-slate-50/50">
+               {fifoFilteredInventory.length > 0 ? fifoFilteredInventory.map((item, index) => {
+                 const isFloor = item.rack === 'FLOOR';
+                 const isFirst = index === 0;
+                 return (
+                   <div key={item.id} className={`p-6 rounded-[2rem] border shadow-sm flex items-center justify-between transition-all 
+                     ${isFloor 
+                        ? 'bg-rose-100 border-rose-300 ring-2 ring-rose-400 shadow-xl' 
+                        : (isFirst ? 'bg-emerald-100 border-emerald-300 ring-2 ring-emerald-400 shadow-xl scale-[1.02]' : 'bg-white border-slate-100 opacity-80')
+                     }`}>
+                      <div className="flex items-center gap-6">
+                         <div className={`w-12 h-12 flex items-center justify-center rounded-xl font-black text-lg ${isFloor ? 'bg-rose-600 text-white' : (isFirst ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-500')}`}>
+                           {index + 1}º
+                         </div>
+                         <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs font-black uppercase text-slate-400">SKU: {item.productId}</span>
+                              {isFloor && <span className="bg-rose-600 text-white text-[9px] font-black px-2 py-0.5 rounded-md uppercase animate-pulse">PRIORIDADE: EXTERNO</span>}
+                              {!isFloor && isFirst && <span className="bg-emerald-600 text-white text-[9px] font-black px-2 py-0.5 rounded-md uppercase animate-pulse">Primeiro a Sair (FIFO)</span>}
+                            </div>
+                            <h4 className="font-black text-slate-800 text-xl uppercase">{item.productName}</h4>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase mt-1 block">Entrada: {new Date(item.createdAt || item.lastUpdated).toLocaleString()}</span>
+                         </div>
+                      </div>
+                      <div className="text-right flex flex-col items-end">
+                         <span className="block text-3xl font-black text-slate-800">{item.rack === 'FLOOR' ? 'CHÃO' : `${item.rack}-${item.position}`}</span>
+                         <span className="text-xs font-black text-slate-400 uppercase">{item.rack === 'FLOOR' ? 'EXTERNO' : `Nível ${LEVEL_LABELS[item.level-1]}`}</span>
+                         <div className="mt-2 text-sm font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-lg inline-block mb-2">QTD: {item.quantity}</div>
+                         <button 
+                           onClick={(e) => {
+                             e.stopPropagation();
+                             setPalletDetails(item);
+                             setIsFIFOMenuOpen(false);
+                           }}
+                           className="bg-rose-100 text-rose-600 px-4 py-2 rounded-xl font-black uppercase text-[10px] hover:bg-rose-200 transition-colors flex items-center gap-2"
+                         >
+                           <LogOut size={14}/> Realizar Saída
+                         </button>
+                      </div>
+                   </div>
+                 );
+               }) : (
+                 <div className="flex flex-col items-center justify-center py-20 opacity-40">
+                   <Clock size={48} className="mb-4"/>
+                   <p className="font-black uppercase text-xs">Digite para buscar itens...</p>
+                 </div>
+               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PALLETS EXTERNOS (FLOOR) */}
+      {isExternalMenuOpen && (
+        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[8000] flex items-center justify-center p-0 lg:p-10" onClick={() => setIsExternalMenuOpen(false)}>
+           <div className="bg-white rounded-none lg:rounded-[3rem] w-full max-w-5xl h-full lg:h-[85vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+              <header className="p-8 border-b flex justify-between items-center shrink-0 bg-amber-50">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-amber-500 text-white rounded-2xl shadow-lg"><LayoutGrid size={24}/></div>
+                  <h3 className="font-black text-2xl italic uppercase text-slate-800">Pallets Externos (Chão)</h3>
+                </div>
+                
+                <div className="flex gap-2">
+                  {currentUser?.role === 'admin' && (
+                    <button 
+                      onClick={() => {
+                        const floorId = `FLOOR-${Date.now()}`;
+                        setSelectedPosition({
+                            id: floorId,
+                            rack: 'FLOOR',
+                            level: 0,
+                            position: 0,
+                            productId: '',
+                            productName: '',
+                            quantity: 0,
+                            slots: 1
+                        });
+                        setIsExternalMenuOpen(false); // Fecha este menu para mostrar o de entrada
+                      }}
+                      className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-md"
+                    >
+                      <PackagePlus size={16}/> Nova Entrada Manual
+                    </button>
+                  )}
+                  <button onClick={() => setIsExternalMenuOpen(false)} className="p-4 bg-white rounded-2xl hover:bg-amber-100 transition-all"><X /></button>
+                </div>
+              </header>
+
+              <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
+                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {inventory.filter(i => i.rack === 'FLOOR').map(item => (
+                       <div key={item.id} className="bg-white p-6 rounded-[2rem] border border-amber-100 shadow-sm hover:shadow-md transition-all relative overflow-hidden group">
+                          <div className="absolute top-0 right-0 bg-amber-500 text-white text-[9px] font-black px-3 py-1 rounded-bl-xl uppercase">Externo</div>
+                          <h4 className="font-black text-slate-800 uppercase text-lg mb-1 pr-12">{item.productName}</h4>
+                          <span className="text-xs font-bold text-slate-400 uppercase block mb-4">SKU: {item.productId}</span>
+                          
+                          <div className="flex justify-between items-end">
+                             <span className="text-2xl font-black text-indigo-600">{item.quantity} UN</span>
+                             <div className="flex gap-2">
+                                <button onClick={() => {
+                                   setPalletDetails(item);
+                                   setIsExternalMenuOpen(false);
+                                }} className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-indigo-600 hover:text-white transition-all"><Info size={18}/></button>
+                                <button onClick={async () => {
+                                   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [50, 50] });
+                                   const codeValue = `PP-FLOOR-P-${item.position}-L-0`;
+                                   doc.rect(1, 1, 48, 48);
+                                   const qrDataUrl = await QRCode.toDataURL(codeValue, { errorCorrectionLevel: 'H', width: 200, margin: 0 });
+                                   doc.addImage(qrDataUrl, 'PNG', 7.5, 8, 35, 35);
+                                   doc.setFontSize(8);
+                                   doc.text("PALLET EXTERNO", 25, 6, { align: "center" });
+                                   doc.text(item.productName?.substring(0,15) || '', 25, 45, { align: "center" });
+                                   doc.save(`Externo_${item.productId}.pdf`);
+                                }} className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-800 hover:text-white transition-all"><Printer size={18}/></button>
+                             </div>
+                          </div>
+                       </div>
+                    ))}
+                    {inventory.filter(i => i.rack === 'FLOOR').length === 0 && (
+                       <div className="col-span-full flex flex-col items-center justify-center py-20 opacity-40">
+                          <LayoutGrid size={48} className="mb-4"/>
+                          <p className="font-black uppercase text-xs">Nenhum pallet armazenado no chão.</p>
+                       </div>
+                    )}
+                 </div>
+              </div>
+           </div>
+        </div>
+      )}
+
+      {/* GESTÃO DE USUÁRIOS (ADMIN) */}
+      {isUserManagementOpen && (
+        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[8000] flex items-center justify-center p-0 lg:p-10" onClick={() => setIsUserManagementOpen(false)}>
+           <div className="bg-white rounded-none lg:rounded-[3rem] w-full max-w-4xl h-full lg:h-[85vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+              <header className="p-8 border-b flex justify-between items-center shrink-0">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-indigo-600 text-white rounded-2xl shadow-lg"><Users size={24}/></div>
+                  <h3 className="font-black text-2xl italic uppercase text-slate-800">Gestão de Usuários</h3>
+                </div>
+                <button onClick={() => setIsUserManagementOpen(false)} className="p-4 bg-slate-100 rounded-2xl hover:bg-slate-200 transition-all"><X /></button>
+              </header>
+
+              <div className="flex-1 overflow-y-auto p-8 space-y-4 no-scrollbar bg-slate-50/50">
+                 {allUsers.length > 0 ? allUsers.map((user, idx) => (
+                   <div key={idx} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between hover:border-indigo-200 transition-all">
+                      <div className="flex items-center gap-4">
+                         <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black text-white shadow-md ${user.role === 'admin' ? 'bg-indigo-600' : 'bg-slate-400'}`}>
+                            {user.username.substring(0,2).toUpperCase()}
+                         </div>
+                         <div>
+                            <h4 className="font-black text-slate-800 text-lg uppercase">{user.username}</h4>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase ${user.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-500'}`}>
+                              {user.role}
+                            </span>
+                         </div>
+                      </div>
+                      
+                      {currentUser?.username !== user.username ? (
+                        <button 
+                          onClick={() => handleUpdateRole(user)}
+                          className={`px-6 py-3 rounded-xl font-black text-[10px] uppercase shadow-sm transition-all flex items-center gap-2 ${
+                            user.role === 'admin' 
+                            ? 'bg-rose-100 text-rose-600 hover:bg-rose-200' 
+                            : 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'
+                          }`}
+                        >
+                          {user.role === 'admin' ? <><ShieldAlert size={14}/> Rebaixar</> : <><ShieldCheck size={14}/> Promover Admin</>}
+                        </button>
+                      ) : (
+                        <span className="text-[9px] text-slate-300 font-bold uppercase italic px-4">Você</span>
+                      )}
+                   </div>
+                 )) : (
+                   <div className="flex flex-col items-center justify-center py-20 opacity-40">
+                     <Users size={48} className="mb-4"/>
+                     <p className="font-black uppercase text-xs">Carregando usuários...</p>
+                   </div>
+                 )}
+              </div>
+           </div>
+        </div>
+      )}
 
       {/* CENTRAL DE ETIQUETAS */}
       {isPrintMenuOpen && (
@@ -694,7 +1379,7 @@ const App: React.FC = () => {
                   disabled={isPrintingBatch}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white px-10 py-5 rounded-[1.5rem] font-black uppercase text-[11px] shadow-xl flex items-center gap-3 transition-all active:scale-95 disabled:opacity-50"
                  >
-                   {isPrintingBatch ? <Loader2 className="animate-spin" /> : <><QrCode size={18}/> GERAR LOTE ({printFilter === 'all' ? 66 : Array.from({length: 66}).filter((_,i)=>!inventory.some(it=>it.rack===activeRack && it.level===(activeLevelIndex+1) && it.position===(i+1))).length})</>}
+                   {isPrintingBatch ? <Loader2 className="animate-spin" /> : <><QrCode size={18}/> GERAR LOTE ({printFilter === 'all' ? 66 : Array.from({length: 66}).filter((_,i)=>!checkOccupancy(activeRack, activeLevelIndex + 1, i + 1)).length})</>}
                  </button>
               </div>
 
@@ -704,7 +1389,10 @@ const App: React.FC = () => {
                     const pos = i + 1;
                     const level = activeLevelIndex + 1;
                     const label = `${activeRack}${pos}${LEVEL_LABELS[activeLevelIndex]}`;
-                    const isOccupied = inventory.some(item => item.rack === activeRack && item.level === level && item.position === pos);
+                    
+                    // Usa a função robusta checkOccupancy que considera vaga dupla
+                    const isOccupied = checkOccupancy(activeRack, level, pos);
+
                     if (printFilter === 'free' && isOccupied) return null;
                     return (
                       <div key={pos} className={`bg-white p-6 rounded-[2.5rem] border border-white shadow-sm flex flex-col items-center justify-between gap-4 group hover:shadow-xl hover:border-indigo-100 transition-all duration-300 relative overflow-hidden`}>
@@ -784,11 +1472,18 @@ const App: React.FC = () => {
                        <h4 className="font-black text-slate-800 text-lg uppercase leading-tight">{item.productName}</h4>
                        <span className="text-[9px] font-bold text-slate-400 uppercase mt-2 block">Padrão: {item.standardQuantity} UN</span>
                      </div>
-                     <button onClick={() => {
-                       if(confirm(`Excluir SKU ${item.productId} da base definitiva?`)) {
-                         deleteMasterProductFromDB(FIXED_DB_STRING, item.productId).then(() => loadInitialData());
-                       }
-                     }} className="p-4 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-2xl transition-all opacity-0 group-hover:opacity-100"><Trash2 size={24}/></button>
+                     <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                       {currentUser?.role === 'admin' && (
+                         <button onClick={() => setEditingProduct(item)} className="p-4 text-slate-300 hover:text-indigo-500 hover:bg-indigo-50 rounded-2xl transition-all">
+                           <Pencil size={24}/>
+                         </button>
+                       )}
+                       <button onClick={() => {
+                         if(confirm(`Excluir SKU ${item.productId} da base definitiva?`)) {
+                           deleteMasterProductFromDB(FIXED_DB_STRING, item.productId).then(() => loadInitialData());
+                         }
+                       }} className="p-4 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-2xl transition-all"><Trash2 size={24}/></button>
+                     </div>
                    </div>
                  )) : (
                    <div className="flex flex-col items-center justify-center py-20 opacity-20">
@@ -797,6 +1492,37 @@ const App: React.FC = () => {
                    </div>
                  )}
               </div>
+           </div>
+        </div>
+      )}
+
+      {/* MODAL EDIÇÃO DE ITEM BASE (ADMIN) */}
+      {editingProduct && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9000] flex items-center justify-center p-6" onClick={() => setEditingProduct(null)}>
+           <div className="bg-white rounded-[3rem] w-full max-w-md p-10 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+             <h3 className="font-black uppercase mb-2 text-indigo-600 italic text-xl tracking-tighter">Editar Item Base</h3>
+             <p className="text-xs font-bold text-slate-400 uppercase mb-8">SKU: {editingProduct.productId}</p>
+             
+             <form onSubmit={handleUpdateMasterProduct} className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-2">ID SKU (Bloqueado)</label>
+                  <input type="text" className="w-full p-5 bg-slate-100 border border-transparent rounded-2xl font-black uppercase text-slate-400 cursor-not-allowed" value={editingProduct.productId} disabled /> 
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Nome / Descrição</label>
+                  <input type="text" className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl font-black uppercase outline-none transition-all" value={editingProduct.productName} onChange={e => setEditingProduct({...editingProduct, productName: e.target.value.toUpperCase()})} required />
+                </div>
+                
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Quantidade Padrão</label>
+                  <input type="number" className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl font-black outline-none transition-all" value={editingProduct.standardQuantity} onChange={e => setEditingProduct({...editingProduct, standardQuantity: parseInt(e.target.value) || 0})} required />
+                </div>
+
+                <button type="submit" disabled={isProcessingAction} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-6 rounded-[2rem] font-black uppercase shadow-2xl active:scale-95 transition-all text-lg flex items-center justify-center gap-2 mt-4">
+                  {isProcessingAction ? <Loader2 className="animate-spin" /> : 'Salvar Alterações'}
+                </button>
+             </form>
            </div>
         </div>
       )}
@@ -851,7 +1577,7 @@ const App: React.FC = () => {
                          <td className="p-6 text-right">
                            <div className="flex flex-wrap justify-end gap-1">
                              {item.locs.map(loc => (
-                               <span key={loc} className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-[9px] font-bold text-slate-500 uppercase">{loc}</span>
+                               <span key={loc} className={`px-2 py-1 border rounded-lg text-[9px] font-bold uppercase ${loc === 'EXTERNO' ? 'bg-amber-50 text-amber-600 border-amber-200' : 'bg-white text-slate-500 border-slate-200'}`}>{loc}</span>
                              ))}
                            </div>
                          </td>
@@ -871,156 +1597,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* HISTÓRICO DE LOGS */}
-      {isLogsOpen && (
-        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-xl z-[8000] flex items-center justify-center p-0 lg:p-10" onClick={() => setIsLogsOpen(false)}>
-           <div className="bg-white rounded-none lg:rounded-[3rem] w-full max-w-4xl h-full lg:h-[85vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
-              <header className="p-8 border-b flex justify-between items-center shrink-0">
-                <div className="flex items-center gap-4">
-                  <div className="p-3 bg-amber-500 text-white rounded-2xl shadow-lg"><History size={24}/></div>
-                  <h3 className="font-black text-2xl italic uppercase text-slate-800">Histórico de Atividades</h3>
-                </div>
-                <button onClick={() => setIsLogsOpen(false)} className="p-4 bg-slate-100 rounded-2xl hover:bg-slate-200 transition-all"><X /></button>
-              </header>
-
-              <div className="flex-1 overflow-y-auto p-8 space-y-4 no-scrollbar bg-slate-50/50">
-                 {logs.length > 0 ? logs.map((log) => (
-                   <div key={log.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between hover:border-amber-200 transition-all">
-                      <div className="flex items-start gap-4">
-                         <div className={`p-3 rounded-xl shrink-0 ${
-                           log.action === 'ENTRADA' ? 'bg-emerald-100 text-emerald-600' : 
-                           log.action === 'SAIDA' ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-600'
-                         }`}>
-                           {log.action === 'ENTRADA' ? <ArrowDownRight size={20}/> : 
-                            log.action === 'SAIDA' ? <ArrowRightCircle size={20}/> : <Info size={20}/>}
-                         </div>
-                         <div>
-                            <span className={`text-[10px] font-black uppercase mb-1 block ${
-                               log.action === 'ENTRADA' ? 'text-emerald-600' : 
-                               log.action === 'SAIDA' ? 'text-rose-600' : 'text-slate-500'
-                            }`}>{log.action}</span>
-                            <p className="font-bold text-slate-800 text-sm uppercase leading-snug">{log.details}</p>
-                            {log.location && <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md mt-2 inline-block">LOCAL: {log.location}</span>}
-                         </div>
-                      </div>
-                      <div className="flex flex-col items-end gap-1 text-right min-w-[100px]">
-                         <div className="flex items-center gap-1.5 text-[10px] font-black text-slate-400 uppercase">
-                            <Calendar size={10}/>
-                            {new Date(log.timestamp).toLocaleDateString()}
-                         </div>
-                         <div className="flex items-center gap-1.5 text-[10px] font-black text-slate-400 uppercase">
-                            <History size={10}/>
-                            {new Date(log.timestamp).toLocaleTimeString()}
-                         </div>
-                         <div className="flex items-center gap-1.5 text-[10px] font-black text-slate-800 bg-slate-100 px-2 py-1 rounded-lg uppercase mt-1">
-                            <User size={10}/>
-                            {log.username}
-                         </div>
-                      </div>
-                   </div>
-                 )) : (
-                   <div className="flex flex-col items-center justify-center py-20 opacity-40">
-                     <History size={48} className="mb-4"/>
-                     <p className="font-black uppercase text-xs">Sem registros recentes</p>
-                   </div>
-                 )}
-              </div>
-           </div>
-        </div>
-      )}
-
-      {/* SCANNER E MODAIS DE QR */}
-      {isScannerOpen && <ScannerModal onScan={(text) => {
-        if (isProcessingAction) return;
-        const regex = /PP-([A-D])-P-(\d+)-L-(\d+)/i;
-        const match = text.match(regex);
-        if (match) { 
-          setIsScannerOpen(false); 
-          // Chama a função central de clique para decidir entre entrada ou saída baseado no inventário ATUAL
-          handlePositionClick(match[1], parseInt(match[3]), parseInt(match[2])); 
-        } else {
-          showFeedback('error', 'Código QR não reconhecido como endereço válido.');
-        }
-      }} onClose={() => setIsScannerOpen(false)} />}
-      
-      {showQR && <QRCodeModal position={showQR} onClose={() => setShowQR(null)} isOccupied={inventory.some(p => p.rack === showQR.rack && p.level === showQR.level && p.position === showQR.pos)} onManage={() => { handlePositionClick(showQR.rack, showQR.level, showQR.pos); setShowQR(null); }} />}
-
-      {/* MODAL ENTRADA */}
-      {selectedPosition && (
-        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[9000] flex items-center justify-center p-6" onClick={() => setSelectedPosition(null)}>
-           <div className="bg-white rounded-[3rem] w-full max-w-md p-10 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-             <h3 className="font-black uppercase mb-8 text-indigo-600 italic text-xl tracking-tighter">Entrada de Item</h3>
-             <form onSubmit={(e) => {
-               e.preventDefault();
-               if (isProcessingAction) return;
-               setIsProcessingAction(true);
-               const opName = currentUser?.username || 'Sistema';
-               const idVaga = `${selectedPosition.rack}${selectedPosition.position}${LEVEL_LABELS[selectedPosition.level-1]}`;
-               
-               saveItemToDB(FIXED_DB_STRING, {...selectedPosition, id: idVaga, lastUpdated: new Date().toISOString()})
-                 .then(() => {
-                    saveLogToDB(FIXED_DB_STRING, {
-                      username: opName,
-                      action: 'ENTRADA',
-                      details: `ENTRADA: ${selectedPosition.productId} (${selectedPosition.quantity} UN)`,
-                      location: idVaga,
-                      timestamp: new Date().toISOString()
-                    });
-                    loadInitialData().then(() => {
-                      setSelectedPosition(null); 
-                      showFeedback('success', `Entrada concluída! Quantidade Total: ${selectedPosition.quantity} UN`);
-                      setIsProcessingAction(false);
-                    });
-                 }).catch(() => {
-                   showFeedback('error', 'Falha ao salvar entrada.');
-                   setIsProcessingAction(false);
-                 });
-             }} className="space-y-4">
-                <input list="sku-list" type="text" placeholder="ID SKU" className="w-full p-5 bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl font-black uppercase outline-none transition-all" value={selectedPosition.productId} onChange={e => {
-                  const val = e.target.value.toUpperCase(); const m = masterProducts.find(x => x.productId === val);
-                  setSelectedPosition({...selectedPosition, productId: val, productName: m?.productName || '', quantity: m?.standardQuantity || 0});
-                }} required />
-                <datalist id="sku-list">{masterProducts.map(m => <option key={m.productId} value={m.productId}>{m.productName}</option>)}</datalist>
-                
-                {selectedPosition.productId && (
-                  <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100 flex flex-col gap-2">
-                     <div className="text-[10px] font-bold text-emerald-700 uppercase flex items-center gap-2">
-                       <Calculator size={14}/> Simulação Global (SKU: {selectedPosition.productId})
-                     </div>
-                     <div className="flex justify-between items-center text-sm">
-                        <div className="text-center">
-                           <span className="block text-[8px] text-slate-400 font-black">ATUAL</span>
-                           <span className="font-black text-slate-600 text-lg">{aggregatedInventory.find(i => i.id === selectedPosition.productId)?.total || 0}</span>
-                        </div>
-                        <Plus size={16} className="text-emerald-500"/>
-                        <div className="text-center">
-                           <span className="block text-[8px] text-emerald-600 font-black">ENTRANDO</span>
-                           <span className="font-black text-emerald-600 text-lg">{selectedPosition.quantity || 0}</span>
-                        </div>
-                        <ArrowRight size={16} className="text-slate-300"/>
-                        <div className="text-center">
-                           <span className="block text-[8px] text-slate-400 font-black">NOVO TOTAL</span>
-                           <span className="font-black text-slate-800 text-xl">{(aggregatedInventory.find(i => i.id === selectedPosition.productId)?.total || 0) + (selectedPosition.quantity || 0)}</span>
-                        </div>
-                     </div>
-                  </div>
-                )}
-
-                <input type="text" placeholder="DESCRIÇÃO DO PRODUTO" className="w-full p-5 bg-slate-50 rounded-2xl font-black uppercase outline-none" value={selectedPosition.productName} onChange={e => setSelectedPosition({...selectedPosition, productName: e.target.value.toUpperCase()})} required />
-                <input type="number" placeholder="QUANTIDADE" className="w-full p-5 bg-slate-50 rounded-2xl font-black text-center text-4xl outline-none" value={selectedPosition.quantity || ''} onChange={e => setSelectedPosition({...selectedPosition, quantity: parseInt(e.target.value) || 0})} required />
-                
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                   <button type="button" onClick={() => setSelectedPosition({...selectedPosition, slots: 1})} className={`p-4 rounded-2xl font-black uppercase text-[10px] border-2 transition-all ${selectedPosition.slots === 1 ? 'bg-indigo-600 text-white border-indigo-600 shadow-lg' : 'bg-slate-50 text-slate-400 border-transparent'}`}>Vaga Simples</button>
-                   <button type="button" onClick={() => setSelectedPosition({...selectedPosition, slots: 2})} className={`p-4 rounded-2xl font-black uppercase text-[10px] border-2 transition-all ${selectedPosition.slots === 2 ? 'bg-indigo-600 text-white border-indigo-600 shadow-lg' : 'bg-slate-50 text-slate-400 border-transparent'}`}>Vaga Dupla</button>
-                </div>
-                <button type="submit" disabled={isProcessingAction} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-6 rounded-[2rem] font-black uppercase shadow-2xl active:scale-95 transition-all text-lg flex items-center justify-center gap-2">
-                  {isProcessingAction ? <Loader2 className="animate-spin" /> : 'Confirmar Entrada'}
-                </button>
-             </form>
-           </div>
-        </div>
-      )}
-
+      {/* MODAL DETALHES DO PALLET */}
       {palletDetails && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[9000] flex items-center justify-center p-6" onClick={() => setPalletDetails(null)}>
            <div className="bg-white rounded-[3rem] w-full max-w-md p-10 shadow-2xl animate-in zoom-in-95 text-center" onClick={e => e.stopPropagation()}>
@@ -1033,35 +1610,57 @@ const App: React.FC = () => {
               </header>
               <div className="bg-indigo-50 p-10 rounded-[2.5rem] mb-8 border border-indigo-100 shadow-inner">
                 <span className="text-4xl font-black italic text-indigo-600 block mb-4 uppercase">
-                  {palletDetails.rack} {palletDetails.position} {palletDetails.slots === 2 ? `e ${palletDetails.position + 1}` : ''} {LEVEL_LABELS[palletDetails.level-1]}
+                  {palletDetails.rack === 'FLOOR' ? 'EXTERNO (CHÃO)' : `${palletDetails.rack} ${palletDetails.position} ${palletDetails.slots === 2 ? `e ${palletDetails.position + 1}` : ''} ${LEVEL_LABELS[palletDetails.level-1]}`}
                 </span>
-                <span className="text-[10px] font-black text-indigo-400 block mb-4 uppercase">Vaga {palletDetails.slots === 2 ? 'Dupla' : 'Simples'}</span>
+                <span className="text-[10px] font-black text-indigo-400 block mb-4 uppercase">
+                   {palletDetails.rack === 'FLOOR' ? 'Armazenagem de Piso' : `Vaga ${palletDetails.slots === 2 ? 'Dupla' : 'Simples'}`}
+                </span>
                 <h4 className="font-black text-slate-800 uppercase text-lg mb-4 leading-tight">{palletDetails.productName}</h4>
                 <div className="flex justify-center gap-3">
                   <span className="px-5 py-2 bg-white rounded-xl text-xs font-black shadow-sm">SKU: {palletDetails.productId}</span>
                   <span className="px-5 py-2 bg-indigo-600 text-white rounded-xl text-xs font-black shadow-md">{palletDetails.quantity} UN</span>
                 </div>
+                <div className="mt-4 pt-4 border-t border-indigo-200/50">
+                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Data de Entrada (FIFO):</span>
+                   <span className="text-xs font-black text-slate-600 uppercase">
+                     {new Date(palletDetails.createdAt || palletDetails.lastUpdated).toLocaleString()}
+                   </span>
+                </div>
               </div>
 
               {!isPartialExitMode ? (
-                <div className="grid grid-cols-2 gap-4">
-                  <button 
-                    disabled={isProcessingAction}
-                    onClick={() => setIsPartialExitMode(true)}
-                    className="w-full bg-amber-500 hover:bg-amber-600 text-white p-6 rounded-[2rem] font-black uppercase shadow-xl active:scale-95 transition-all text-sm flex flex-col items-center justify-center gap-1 border-b-4 border-amber-700"
-                  >
-                    <PackageMinus size={24} />
-                    Saída Parcial
-                  </button>
+                <div className="flex flex-col gap-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <button 
+                      disabled={isProcessingAction}
+                      onClick={() => setIsPartialExitMode(true)}
+                      className="w-full bg-amber-500 hover:bg-amber-600 text-white p-6 rounded-[2rem] font-black uppercase shadow-xl active:scale-95 transition-all text-sm flex flex-col items-center justify-center gap-1 border-b-4 border-amber-700"
+                    >
+                      <PackageMinus size={24} />
+                      Saída Parcial
+                    </button>
 
-                  <button 
-                    disabled={isProcessingAction}
-                    onClick={handleTotalExit} 
-                    className="w-full bg-rose-600 hover:bg-rose-700 text-white p-6 rounded-[2rem] font-black uppercase shadow-xl active:scale-95 transition-all text-sm flex flex-col items-center justify-center gap-1 border-b-4 border-rose-800"
-                  >
-                    <PackageX size={24} />
-                    Baixa Total
-                  </button>
+                    <button 
+                      disabled={isProcessingAction}
+                      onClick={handleTotalExit} 
+                      className="w-full bg-rose-600 hover:bg-rose-700 text-white p-6 rounded-[2rem] font-black uppercase shadow-xl active:scale-95 transition-all text-sm flex flex-col items-center justify-center gap-1 border-b-4 border-rose-800"
+                    >
+                      <PackageX size={24} />
+                      Baixa Total
+                    </button>
+                  </div>
+                  
+                  {/* Botão de Adicionar Mais Itens (Apenas Admin) */}
+                  {currentUser?.role === 'admin' && palletDetails.rack !== 'FLOOR' && (
+                    <button 
+                      disabled={isProcessingAction}
+                      onClick={handleAddToStock}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white p-4 rounded-[1.5rem] font-black uppercase shadow-lg active:scale-95 transition-all text-[10px] flex items-center justify-center gap-2 border-b-4 border-emerald-800"
+                    >
+                      <PackagePlus size={18} />
+                      ADICIONAR MAIS (+ ITENS NESTA POSIÇÃO)
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="bg-amber-50 p-6 rounded-[2rem] border border-amber-200 animate-in slide-in-from-bottom duration-300">
@@ -1111,6 +1710,63 @@ const App: React.FC = () => {
                   </div>
                 </div>
               )}
+           </div>
+        </div>
+      )}
+
+      {/* MODAL NOVA ENTRADA MANUAL (VAGA VAZIA ou FLOOR) */}
+      {selectedPosition && (
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[9000] flex items-center justify-center p-6" onClick={() => setSelectedPosition(null)}>
+           <div className="bg-white rounded-[3rem] w-full max-w-md p-10 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+              <header className="flex justify-between items-center mb-8">
+                 <div>
+                    <h3 className="font-black uppercase text-indigo-600 italic text-xl tracking-tighter">Nova Entrada</h3>
+                    <span className="text-xs font-bold text-slate-400 uppercase">
+                       Local: {selectedPosition.rack === 'FLOOR' ? 'EXTERNO (CHÃO)' : `${selectedPosition.rack}-${selectedPosition.position} (Nível ${selectedPosition.level})`}
+                    </span>
+                 </div>
+                 <button onClick={() => setSelectedPosition(null)} className="p-3 bg-slate-100 rounded-2xl hover:bg-slate-200 transition-all"><X /></button>
+              </header>
+
+              <form onSubmit={handleManualEntrySubmit} className="space-y-6">
+                 <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-2">Produto (SKU)</label>
+                    <input 
+                       list="sku-list-manual" 
+                       autoFocus
+                       className="w-full p-5 bg-slate-50 rounded-2xl font-black uppercase border-2 border-transparent focus:border-indigo-600 outline-none transition-all"
+                       placeholder="BUSCAR SKU..."
+                       value={manualEntryData.sku}
+                       onChange={e => {
+                         const newSku = e.target.value.toUpperCase();
+                         const masterItem = masterProducts.find(m => m.productId === newSku);
+                         setManualEntryData({
+                           sku: newSku,
+                           // Se encontrar o item na base, preenche a quantidade, senão mantém a atual
+                           qty: masterItem ? masterItem.standardQuantity.toString() : manualEntryData.qty
+                         });
+                       }}
+                    />
+                    <datalist id="sku-list-manual">
+                       {masterProducts.map(m => <option key={m.productId} value={m.productId}>{m.productName}</option>)}
+                    </datalist>
+                 </div>
+
+                 <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-2">Quantidade</label>
+                    <input 
+                       type="number" 
+                       className="w-full p-5 bg-slate-50 rounded-2xl font-black text-2xl outline-none border-2 border-transparent focus:border-indigo-600 transition-all"
+                       placeholder="0"
+                       value={manualEntryData.qty}
+                       onChange={e => setManualEntryData({...manualEntryData, qty: e.target.value})}
+                    />
+                 </div>
+
+                 <button type="submit" disabled={isProcessingAction} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white p-6 rounded-[2rem] font-black uppercase shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3 text-lg">
+                    {isProcessingAction ? <Loader2 className="animate-spin"/> : <><Save size={24}/> Confirmar Entrada</>}
+                 </button>
+              </form>
            </div>
         </div>
       )}

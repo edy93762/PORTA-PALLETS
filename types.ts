@@ -1,8 +1,8 @@
 
-export type RackId = 'A' | 'B' | 'C' | 'D';
+export type RackId = 'A' | 'B' | 'C' | 'D' | 'FLOOR';
 
 export interface PalletPosition {
-  id: string; // Endereço físico: rack-level-pos (ex: AA1)
+  id: string; // Endereço físico: rack-level-pos (ex: AA1) ou FLOOR-UUID
   rack: RackId;
   level: number;
   position: number;
@@ -11,6 +11,7 @@ export interface PalletPosition {
   quantity?: number;
   slots?: number;        // Quantidade de vagas ocupadas (1 ou 2)
   lastUpdated?: string;
+  createdAt?: string;    // Data de entrada original (Crucial para FIFO)
 }
 
 export interface MasterProduct {
