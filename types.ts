@@ -1,8 +1,7 @@
-
-export type RackId = 'A' | 'B' | 'C' | 'D' | 'FLOOR';
+export type RackId = '1' | '2' | '3' | '4' | 'A' | 'B' | 'C' | 'D' | 'FLOOR';
 
 export interface PalletPosition {
-  id: string; // Endereço físico: rack-level-pos (ex: AA1) ou FLOOR-UUID
+  id: string; // Endereço físico: rack-level-pos (ex: A-1-1) ou FLOOR-UUID
   rack: RackId;
   level: number;
   position: number;
