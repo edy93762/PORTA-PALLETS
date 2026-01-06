@@ -1,6 +1,6 @@
 {
   "name": "Almox - Gestão de Porta-Paletes",
-  "description": "Gestão de estoque em porta-paletes com visualização 3D, geração de QR Codes e automação logística.",
+  "description": "Gestão avançada de estoque em porta-paletes com suporte a múltiplas vagas, saída parcial e visualização inteligente.",
   "requestFramePermissions": [
     "camera"
   ]

@@ -20,7 +20,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
   const [isInitializing, setIsInitializing] = useState(true);
   const [torchOn, setTorchOn] = useState(false);
 
-  // Atualiza a referência da função onScan sempre que ela mudar no pai (sem reiniciar a câmera)
+  // Atualiza a referência da função onScan sempre que ela mudar no pai
   useEffect(() => {
     onScanRef.current = onScan;
   }, [onScan]);
@@ -67,13 +67,18 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
     if (scannerRef.current && scannerRef.current.isScanning) {
       try {
         const state = !torchOn;
-        await scannerRef.current.applyVideoConstraints({
-          // @ts-ignore
-          advanced: [{ torch: state }]
-        });
-        setTorchOn(state);
+        // @ts-ignore
+        const capabilities = scannerRef.current.getRunningTrackCapabilities();
+        // @ts-ignore
+        if (capabilities && capabilities.torch) {
+             await scannerRef.current.applyVideoConstraints({
+              // @ts-ignore
+              advanced: [{ torch: state }]
+            });
+            setTorchOn(state);
+        }
       } catch (e) {
-        console.warn("Torch not supported");
+        console.warn("Torch error", e);
       }
     }
   };
@@ -83,8 +88,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
     const elementId = containerId;
 
     const startScanner = async () => {
-      // Delay para garantir renderização do DOM
-      await new Promise(resolve => setTimeout(resolve, 300));
+      // Pequeno delay para garantir que o elemento DOM exista
+      await new Promise(resolve => setTimeout(resolve, 100));
       if (!isMounted) return;
 
       try {
@@ -96,10 +101,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
           } catch(e) {}
         }
 
-        scannerRef.current = new Html5Qrcode(elementId);
+        const html5QrCode = new Html5Qrcode(elementId);
+        scannerRef.current = html5QrCode;
 
         const config = { 
-          fps: 25, 
+          fps: 15, 
           qrbox: (viewWidth: number, viewHeight: number) => {
             const minSize = Math.min(viewWidth, viewHeight);
             const size = Math.floor(minSize * 0.7);
@@ -110,9 +116,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
         };
 
         const onScanSuccess = (decodedText: string) => {
-          // Usa Ref para verificar processamento, evitando stale closures
           if (isMounted && !isProcessingRef.current) {
-            isProcessingRef.current = true; // Bloqueia novas leituras imediatamente
+            isProcessingRef.current = true;
             playBeep();
 
             // Feedback Visual
@@ -122,7 +127,6 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
               videoEl.style.filter = 'brightness(2.5) contrast(1.5)';
             }
             
-            // Pausa e envia o resultado
             setTimeout(() => {
               if (isMounted) {
                 onScanRef.current(decodedText);
@@ -131,56 +135,56 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
           }
         };
 
-        // Tentativa 1: facingMode environment (padrão moderno)
+        // Estratégia de Inicialização em Cascata
+        let started = false;
+
+        // Tentativa 1: Facing Mode "environment"
         try {
-          await scannerRef.current.start(
-            { facingMode: "environment" }, 
-            config, 
-            onScanSuccess, 
-            () => {}
-          );
-        } catch (err) {
-          console.warn("Facing mode failed, trying device ID enumeration...", err);
-          
-          // Tentativa 2: Enumeração manual (fallback para Androids antigos/específicos)
+          await html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, undefined);
+          started = true;
+        } catch (err1) {
+          console.warn("Tentativa 1 (facingMode: environment) falhou:", err1);
+        }
+
+        // Tentativa 2: Listar Câmeras e escolher a traseira
+        if (!started) {
           try {
             const devices = await Html5Qrcode.getCameras();
             if (devices && devices.length > 0) {
-              // Tenta pegar a câmera traseira pela label ou a última da lista (comumente traseira)
-              const backCam = devices.find(d => /back|rear|traseira|environment/i.test(d.label)) || devices[devices.length - 1];
+              // Tenta achar câmera traseira por label
+              const backCamera = devices.find(d => /back|rear|traseira|environment/i.test(d.label));
+              const cameraId = backCamera ? backCamera.id : devices[devices.length - 1].id; // Fallback para a última (geralmente traseira no mobile)
               
-              await scannerRef.current.start(
-                backCam.id, 
-                config, 
-                onScanSuccess, 
-                () => {}
-              );
+              await html5QrCode.start(cameraId, config, onScanSuccess, undefined);
+              started = true;
             } else {
-              throw new Error("Nenhuma câmera detectada.");
+              throw new Error("Nenhuma câmera encontrada na lista.");
             }
           } catch (err2) {
-             console.error("Critical Scanner Error (Fallback):", err2);
-             // Se falhar ao especificar ID, tenta qualquer câmera disponível sem constraints
-             const devices = await Html5Qrcode.getCameras();
-             if (devices && devices.length > 0) {
-                 await scannerRef.current.start(
-                   devices[0].id, 
-                   config, 
-                   onScanSuccess, 
-                   () => {}
-                 );
-             } else {
-                 throw err2;
-             }
+             console.warn("Tentativa 2 (deviceId) falhou:", err2);
           }
+        }
+
+        // Tentativa 3: Facing Mode "user" (Frontal/Webcam)
+        if (!started) {
+             try {
+               await html5QrCode.start({ facingMode: "user" }, config, onScanSuccess, undefined);
+               started = true;
+             } catch (err3) {
+                console.warn("Tentativa 3 (facingMode: user) falhou:", err3);
+             }
+        }
+        
+        if (!started) {
+           throw new Error("Não foi possível iniciar nenhuma câmera. Verifique permissões.");
         }
         
         if (isMounted) setIsInitializing(false);
 
       } catch (err: any) {
-        console.error("Critical Scanner Error (Final):", err);
+        console.error("Erro Fatal Scanner:", err);
         if (isMounted) {
-          setErrorMsg("Câmera indisponível. Verifique permissões ou se outro app a está usando.");
+          setErrorMsg("Câmera indisponível. Verifique permissões ou use outro dispositivo.");
           setIsInitializing(false);
         }
       }
@@ -190,11 +194,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
 
     return () => {
       isMounted = false;
-      if (scannerRef.current && scannerRef.current.isScanning) {
-        scannerRef.current.stop().then(() => scannerRef.current?.clear()).catch(() => {});
+      if (scannerRef.current) {
+          scannerRef.current.stop().then(() => scannerRef.current?.clear()).catch(() => {});
       }
     };
-  }, []); // Dependência vazia: A câmera só inicializa UMA vez na montagem do componente
+  }, []);
 
   return (
     <div className="fixed inset-0 bg-black z-[9999] flex flex-col overflow-hidden animate-in fade-in duration-300">
@@ -278,3 +282,4 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
     </div>
   );
 };
+    

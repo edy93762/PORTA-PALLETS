@@ -16,6 +16,13 @@ interface Warehouse3DProps {
   highlightProductId?: string | null;
 }
 
+const RACK_POSITIONS: Record<string, number> = {
+  'A': 62,
+  'B': 66,
+  'C': 66,
+  'D': 62
+};
+
 const PalletBox = ({ 
   position, 
   occupied, 
@@ -62,9 +69,8 @@ const PalletBox = ({
   );
 };
 
-const RackStructure = ({ rackId, offset, type }: { rackId: string, offset: [number, number, number], type: 'vertical' | 'standard' }) => {
-  const levels = 8;
-  const positions = type === 'vertical' ? 1 : 66;
+const RackStructure = ({ rackId, offset, type, positions }: { rackId: string, offset: [number, number, number], type: 'vertical' | 'standard', positions: number }) => {
+  const levels = 5;
   const width = positions * 1.1;
   const height = levels * 1.2;
 
@@ -100,8 +106,7 @@ const RackStructure = ({ rackId, offset, type }: { rackId: string, offset: [numb
 
 export const Warehouse3D: React.FC<Warehouse3DProps> = ({ inventory, onPositionClick, stats, highlightProductId }) => {
   const ppRacks: RackId[] = ['A', 'B', 'C', 'D'];
-  const verticalRacks: RackId[] = ['1', '2', '3', '4'];
-  const levels = 8;
+  const levels = 5;
 
   const inventoryMap = useMemo(() => {
     const map = new Map<string, PalletPosition>();
@@ -133,46 +138,15 @@ export const Warehouse3D: React.FC<Warehouse3DProps> = ({ inventory, onPositionC
         <spotLight position={[50, 100, 50]} angle={0.2} penumbra={1} intensity={1.5} castShadow />
         
         <group>
-          {/* Racks Verticais (1-4) - À esquerda */}
-          {verticalRacks.map((rackId, rIdx) => {
-            const xOffset = -15; 
-            const zOffset = rIdx * 5;
-            return (
-              <group key={rackId}>
-                <RackStructure rackId={rackId} offset={[xOffset, 0, zOffset]} type="vertical" />
-                {Array.from({ length: levels }).map((_, lIdx) => {
-                    const level = lIdx + 1;
-                    const pos = 1; // Posição fixa para vertical
-                    const key = `${rackId}-${level}-${pos}`;
-                    const item = inventoryMap.get(key);
-                    const isOccupied = !!item;
-                    const isHighlighted = !!(item && highlightProductId && item.productId === highlightProductId);
-
-                    return (
-                      <PalletBox 
-                        key={key}
-                        position={[xOffset, lIdx * 1.2 + 0.35, zOffset]}
-                        occupied={isOccupied}
-                        isHighlighted={isHighlighted}
-                        isDouble={false}
-                        data={{ rack: rackId, level, pos }}
-                        onClick={() => onPositionClick?.(rackId, level, pos)}
-                      />
-                    );
-                })}
-              </group>
-            )
-          })}
-
-          {/* Porta Pallets (A-D) - À direita */}
           {ppRacks.map((rackId, rIdx) => {
             const zOffset = rIdx * 16;
+            const positionsCount = RACK_POSITIONS[rackId];
             return (
               <group key={rackId}>
-                <RackStructure rackId={rackId} offset={[0, 0, zOffset]} type="standard" />
+                <RackStructure rackId={rackId} offset={[0, 0, zOffset]} type="standard" positions={positionsCount} />
                 {Array.from({ length: levels }).map((_, lIdx) => {
                   let skipNext = false;
-                  return Array.from({ length: 66 }).map((_, pIdx) => {
+                  return Array.from({ length: positionsCount }).map((_, pIdx) => {
                     if (skipNext) {
                       skipNext = false;
                       return null;
