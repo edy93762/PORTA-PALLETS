@@ -34,7 +34,7 @@ export interface AppUser {
 export interface ActivityLog {
   id?: number;
   username: string;
-  action: 'ENTRADA' | 'SAIDA' | 'SAIDA_PARCIAL' | 'CADASTRO' | 'EXCLUSAO' | 'ADMIN_APPROVAL' | 'BLOQUEIO' | 'DESBLOQUEIO';
+  action: 'ENTRADA' | 'SAIDA' | 'SAIDA_PARCIAL' | 'CADASTRO' | 'EXCLUSAO' | 'ADMIN_APPROVAL' | 'BLOQUEIO' | 'DESBLOQUEIO' | 'MOVIMENTACAO';
   details: string; // SKU, Nome do Item, Qtd
   timestamp: string;
   location?: string; // Endereço
