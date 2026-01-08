@@ -1,11 +1,12 @@
 
-export type RackId = '1' | '2' | '3' | '4' | 'A' | 'B' | 'C' | 'D' | 'G1' | 'G2' | 'G3' | 'FLOOR';
+// Adicionando 'D' à união de RackId para suportar o quarto porta-palete conforme configurado no App
+export type RackId = 'A' | 'B' | 'C' | 'D' | '1' | '2' | '3' | '4' | 'FLOOR' | 'GAIOLA';
 
 export interface PalletPosition {
-  id: string; // Endereço físico: rack-level-pos (ex: A-1-1) ou FLOOR-UUID
+  id: string; // Endereço físico: rack-level-pos
   rack: RackId;
-  level: number;
-  position: number;
+  level: number; // 1=A, 2=B... para Prateleiras | 1, 2, 3... para PP
+  position: number; // 1, 2, 3 (Gaiolas) ou 1..60 (PP)
   productId?: string;    // ID do Produto
   productName?: string;  // Descrição/Nome
   quantity?: number;

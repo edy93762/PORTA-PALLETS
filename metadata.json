@@ -1,7 +1,5 @@
 {
   "name": "Almox - Gestão de Porta-Paletes",
-  "description": "Gestão avançada de estoque em porta-paletes com suporte a múltiplas vagas, saída parcial e visualização inteligente.",
-  "requestFramePermissions": [
-    "camera"
-  ]
+  "description": "Gestão avançada de estoque em porta-paletes com foco em operação rápida de entrada e saída.",
+  "requestFramePermissions": []
 }

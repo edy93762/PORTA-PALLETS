@@ -88,8 +88,17 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
     const elementId = containerId;
 
     const startScanner = async () => {
+      // Check for camera support
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+         if(isMounted) {
+            setErrorMsg("Acesso à câmera não suportado neste navegador/contexto (HTTPS requerido).");
+            setIsInitializing(false);
+         }
+         return;
+      }
+
       // Pequeno delay para garantir que o elemento DOM exista
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 300));
       if (!isMounted) return;
 
       try {
@@ -108,7 +117,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
           fps: 15, 
           qrbox: (viewWidth: number, viewHeight: number) => {
             const minSize = Math.min(viewWidth, viewHeight);
-            const size = Math.floor(minSize * 0.7);
+            // Minimum size of 'config.qrbox' dimension value must be 50px.
+            const size = Math.max(50, Math.floor(minSize * 0.7));
             return { width: size, height: size };
           },
           aspectRatio: 1.0,
@@ -135,48 +145,17 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
           }
         };
 
-        // Estratégia de Inicialização em Cascata
-        let started = false;
-
-        // Tentativa 1: Facing Mode "environment"
+        // Simplified Initialization Strategy
         try {
-          await html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, undefined);
-          started = true;
+           await html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, undefined);
         } catch (err1) {
-          console.warn("Tentativa 1 (facingMode: environment) falhou:", err1);
-        }
-
-        // Tentativa 2: Listar Câmeras e escolher a traseira
-        if (!started) {
-          try {
-            const devices = await Html5Qrcode.getCameras();
-            if (devices && devices.length > 0) {
-              // Tenta achar câmera traseira por label
-              const backCamera = devices.find(d => /back|rear|traseira|environment/i.test(d.label));
-              const cameraId = backCamera ? backCamera.id : devices[devices.length - 1].id; // Fallback para a última (geralmente traseira no mobile)
-              
-              await html5QrCode.start(cameraId, config, onScanSuccess, undefined);
-              started = true;
-            } else {
-              throw new Error("Nenhuma câmera encontrada na lista.");
-            }
-          } catch (err2) {
-             console.warn("Tentativa 2 (deviceId) falhou:", err2);
-          }
-        }
-
-        // Tentativa 3: Facing Mode "user" (Frontal/Webcam)
-        if (!started) {
-             try {
-               await html5QrCode.start({ facingMode: "user" }, config, onScanSuccess, undefined);
-               started = true;
-             } catch (err3) {
-                console.warn("Tentativa 3 (facingMode: user) falhou:", err3);
-             }
-        }
-        
-        if (!started) {
-           throw new Error("Não foi possível iniciar nenhuma câmera. Verifique permissões.");
+           console.warn("Environment camera failed, trying default.", err1);
+           try {
+             await html5QrCode.start({ facingMode: "user" }, config, onScanSuccess, undefined);
+           } catch (err2) {
+             console.error("All camera attempts failed", err2);
+             throw new Error("Não foi possível iniciar a câmera. Verifique permissões.");
+           }
         }
         
         if (isMounted) setIsInitializing(false);
@@ -184,7 +163,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
       } catch (err: any) {
         console.error("Erro Fatal Scanner:", err);
         if (isMounted) {
-          setErrorMsg("Câmera indisponível. Verifique permissões ou use outro dispositivo.");
+          setErrorMsg("Câmera indisponível. Verifique permissões ou use HTTPS.");
           setIsInitializing(false);
         }
       }
@@ -282,4 +261,3 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ onScan, onClose }) =
     </div>
   );
 };
-    
