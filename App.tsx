@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Box, User, Lock,
   UserCheck, Search, Trash2, Layers, LogOut,
   TrendingUp, History, ArrowUpRight, ArrowDownLeft, Plus,
-  MousePointer2, Zap, AlertTriangle, Users, Filter, CalendarClock, XCircle, FileText, CheckSquare
+  MousePointer2, Zap, AlertTriangle, Users, Filter, CalendarClock, XCircle, FileText, CheckSquare, FileSignature
 } from 'lucide-react';
 import { jsPDF } from "jspdf";
 import { PalletPosition, RackId, MasterProduct, AppUser, ActivityLog } from './types';
@@ -211,295 +211,233 @@ const MasterProductModal = ({ masterProducts, onClose, onSave }) => {
 const HistoryModal = ({ isOpen, onClose }) => {
     const [logs, setLogs] = useState<ActivityLog[]>([]);
     const [loading, setLoading] = useState(true);
-    const [viewMode, setViewMode] = useState<'TIMELINE' | 'USERS'>('USERS');
-    
-    // REGRA DE OURO: Sempre false por padrão, pois queremos ver a Ficha Completa
-    // FALSE = Mostra histórico completo cronológico (ficha)
-    // TRUE = Mostra resumo (última interação)
-    const [showConsolidated, setShowConsolidated] = useState(false); 
+    const [selectedUser, setSelectedUser] = useState<string | null>(null);
 
-    useEffect(() => { if (isOpen) { setLoading(true); fetchLogsFromDB(FIXED_DB_STRING).then(d => { setLogs(d); setLoading(false); }); } }, [isOpen]);
+    // Carregar logs ao abrir
+    useEffect(() => { 
+        if (isOpen) { 
+            setLoading(true); 
+            fetchLogsFromDB(FIXED_DB_STRING).then(d => { 
+                setLogs(d); 
+                setLoading(false); 
+            }); 
+            setSelectedUser(null);
+        } 
+    }, [isOpen]);
 
-    // Lógica de agrupamento de usuários
-    const userGroups = useMemo(() => {
-        const groups: Record<string, ActivityLog[]> = {};
-        logs.forEach(log => {
-            if (!groups[log.username]) groups[log.username] = [];
-            groups[log.username].push(log);
-        });
-        
-        return Object.entries(groups).sort(([, aLogs], [, bLogs]) => {
-            const timeA = new Date(aLogs[0].timestamp).getTime();
-            const timeB = new Date(bLogs[0].timestamp).getTime();
-            return timeB - timeA;
-        });
+    // Agrupa usuários para o menu lateral
+    const usersList = useMemo(() => {
+        const users = new Set(logs.map(l => l.username));
+        return Array.from(users).sort();
     }, [logs]);
 
-    const getDisplayedLogs = (userLogs: ActivityLog[]) => {
-        if (showConsolidated) {
-            // Modo Resumo: Deduplica por SKU
-            const uniqueItems = new Map<string, ActivityLog>();
-            for (const log of userLogs) {
-                const key = log.sku || log.details; 
-                if (!uniqueItems.has(key)) {
-                    uniqueItems.set(key, log);
-                }
-            }
-            return Array.from(uniqueItems.values());
-        } else {
-            // REGRA: DO MAIS ANTIGO (CIMA) PARA MAIS NOVO (BAIXO)
-            // userLogs vem do DB ordenado por TIMESTAMP DESC (Mais novo primeiro)
-            // Precisamos inverter para simular a folha de papel sendo preenchida linha a linha
-            return [...userLogs].reverse();
-        }
-    };
+    // Filtra e ORDENA OS LOGS DO MAIS ANTIGO PARA O MAIS NOVO (CRONOLÓGICO)
+    // O banco retorna DESC (mais novo primeiro), então invertemos.
+    const currentUserLogs = useMemo(() => {
+        if (!selectedUser) return [];
+        return logs
+            .filter(l => l.username === selectedUser)
+            .reverse(); // INVERTE PARA: 01/01 (TOPO) -> 05/01 (FUNDO)
+    }, [logs, selectedUser]);
 
-    const generateUserPDF = (username: string, userLogs: ActivityLog[]) => {
-        // Para o PDF, SEMPRE usamos o histórico completo em ordem CRONOLÓGICA (Antigo -> Novo)
-        // Isso garante que o PDF seja sempre uma extensão da versão anterior
-        const chronologicalLogs = [...userLogs].reverse();
-        
+    const generatePDF = () => {
+        if (!selectedUser || currentUserLogs.length === 0) return;
+
         const doc = new jsPDF();
         
         // Header
-        doc.setFillColor(30, 41, 59); // Slate 800
-        doc.rect(0, 0, 210, 40, 'F');
+        doc.setFillColor(30, 41, 59); 
+        doc.rect(0, 0, 210, 35, 'F');
         doc.setTextColor(255, 255, 255);
-        doc.setFontSize(22);
+        doc.setFontSize(18);
         doc.setFont("helvetica", "bold");
-        doc.text("FICHA DE MOVIMENTAÇÃO / EPI", 105, 18, { align: "center" });
-        doc.setFontSize(10);
+        doc.text("FICHA INDIVIDUAL DE EPI / MOVIMENTAÇÃO", 105, 15, { align: "center" });
+        doc.setFontSize(9);
         doc.setFont("helvetica", "normal");
-        doc.text("DOCUMENTO DE REGISTRO INDIVIDUAL", 105, 26, { align: "center" });
+        doc.text("Histórico Completo e Atualizado - Documento Oficial", 105, 25, { align: "center" });
 
-        // User Info Box
+        // User Info
         doc.setDrawColor(200, 200, 200);
         doc.setFillColor(255, 255, 255);
-        doc.rect(14, 45, 182, 20);
+        doc.rect(14, 40, 182, 18);
         
         doc.setTextColor(30, 41, 59);
         doc.setFontSize(10);
         doc.setFont("helvetica", "bold");
         doc.text("COLABORADOR:", 18, 52);
         doc.setFont("helvetica", "normal");
-        doc.text(username.toUpperCase(), 50, 52);
-        
-        doc.setFont("helvetica", "bold");
-        doc.text("EMISSÃO:", 18, 59);
-        doc.setFont("helvetica", "normal");
-        doc.text(new Date().toLocaleString(), 50, 59);
+        doc.text(selectedUser.toUpperCase(), 55, 52);
         
         // Table Header
-        let y = 75;
-        doc.setFillColor(226, 232, 240); // Slate 200
-        doc.rect(14, y-8, 182, 10, 'F');
-        doc.setFontSize(9);
+        let y = 65;
+        doc.setFillColor(241, 245, 249); 
+        doc.rect(14, y-6, 182, 8, 'F');
+        doc.setFontSize(8);
         doc.setFont("helvetica", "bold");
         doc.setTextColor(71, 85, 105);
-        doc.text("DATA", 16, y-2);
-        doc.text("HORA", 36, y-2);
-        doc.text("DESCRIÇÃO DO ITEM", 55, y-2);
-        doc.text("TIPO", 130, y-2);
-        doc.text("QTD", 150, y-2);
-        doc.text("ASSINATURA", 170, y-2); // Simulação de campo de assinatura
+        doc.text("DATA / HORA", 16, y);
+        doc.text("AÇÃO", 45, y);
+        doc.text("DESCRIÇÃO DO ITEM", 75, y);
+        doc.text("QTD", 150, y);
+        doc.text("ASSINATURA", 170, y);
         
-        y += 4;
+        y += 8;
 
-        // Table Rows
+        // Rows
         doc.setFont("helvetica", "normal");
-        chronologicalLogs.forEach((log, index) => {
-            if (y > 270) {
-                doc.addPage();
-                y = 20;
-            }
+        currentUserLogs.forEach((log, index) => {
+            if (y > 275) { doc.addPage(); y = 20; }
 
-            // Zebra striping
+            // Zebra
             if (index % 2 === 1) {
                 doc.setFillColor(248, 250, 252);
                 doc.rect(14, y-4, 182, 8, 'F');
             }
 
-            const dateObj = new Date(log.timestamp);
-            const dateStr = dateObj.toLocaleDateString();
-            const timeStr = dateObj.toLocaleTimeString().slice(0,5);
+            const date = new Date(log.timestamp);
             const isEntry = log.action === 'ENTRADA';
+
+            doc.setTextColor(30, 41, 59);
+            doc.text(`${date.toLocaleDateString()} ${date.toLocaleTimeString().slice(0,5)}`, 16, y+1);
             
-            doc.setTextColor(30, 41, 59); 
-            doc.text(dateStr, 16, y+1);
-            doc.text(timeStr, 36, y+1);
-            
-            const itemText = (log.sku ? `${log.sku}` : log.details.substring(0, 35)).toUpperCase();
-            doc.text(itemText, 55, y+1);
-            
+            doc.setTextColor(isEntry ? 22 : 185, isEntry ? 163 : 28, isEntry ? 74 : 28);
             doc.setFont("helvetica", "bold");
-            doc.setTextColor(isEntry ? 22 : 220, isEntry ? 163 : 38, isEntry ? 74 : 38);
-            doc.text(log.action.substring(0, 10), 130, y+1);
+            doc.text(log.action, 45, y+1);
             
             doc.setTextColor(30, 41, 59);
             doc.setFont("helvetica", "normal");
-            doc.text(log.quantity?.toString() || '1', 150, y+1);
-            
-            // Campo de Visto/Assinatura Digital
-            doc.setFontSize(8);
-            doc.setTextColor(100, 116, 139);
-            doc.text("[ VISTO DIGITAL ]", 170, y+1);
-            doc.setFontSize(9);
-            doc.setTextColor(30, 41, 59);
+            doc.text((log.sku || log.details).substring(0, 35).toUpperCase(), 75, y+1);
+            doc.text(String(log.quantity), 150, y+1);
 
-            // Linha divisória inferior
+            // Mock Signature
+            doc.setTextColor(150, 150, 150);
+            doc.setFontSize(7);
+            doc.text("[ VISTO ]", 170, y+1);
+            doc.setFontSize(8);
+
             doc.setDrawColor(226, 232, 240);
             doc.line(14, y+4, 196, y+4);
 
             y += 8;
         });
-        
-        // Rodapé da Ficha
-        if (y < 250) {
-             y += 10;
-             doc.setFontSize(8);
-             doc.setTextColor(150,150,150);
-             doc.text("Declaro que recebi os itens listados acima e comprometo-me a utilizá-los corretamente.", 105, y, { align: "center" });
-             y += 15;
-             doc.line(60, y, 150, y);
-             doc.text("Assinatura do Colaborador", 105, y+5, { align: "center" });
-        }
 
-        doc.save(`Ficha_EPI_${username.replace(/\s+/g, '_')}.pdf`);
+        // Footer Text
+        y += 10;
+        if(y > 260) { doc.addPage(); y = 30; }
+        doc.setFontSize(8);
+        doc.setTextColor(100, 100, 100);
+        doc.text("Declaro ter recebido os itens acima relacionados em perfeito estado de conservação e uso.", 105, y, { align: "center" });
+
+        doc.save(`FICHA_EPI_${selectedUser.toUpperCase().replace(/\s+/g, '_')}.pdf`);
     };
 
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 bg-slate-900/90 z-[8000] flex justify-center pt-10 px-4 backdrop-blur-md">
-            <div className="w-full max-w-5xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col h-[90vh] relative animate-in slide-in-from-bottom-10">
+        <div className="fixed inset-0 bg-slate-900/95 z-[8000] flex justify-center items-center p-4 backdrop-blur-sm">
+            <div className="w-full max-w-6xl bg-white rounded-[2rem] shadow-2xl overflow-hidden flex flex-col h-[85vh] relative animate-in zoom-in-95 duration-200">
                 
-                {/* BOTÃO FECHAR GRANDE ESTILO PDF */}
-                <button onClick={onClose} className="absolute top-6 right-6 z-50 p-2 bg-rose-100 text-rose-600 rounded-full hover:bg-rose-600 hover:text-white transition-all shadow-md group">
-                    <X size={32} className="group-hover:scale-110 transition-transform"/>
+                {/* FECHAR (X) GIGANTE */}
+                <button onClick={onClose} className="absolute top-4 right-4 z-50 p-3 bg-rose-100 text-rose-600 rounded-full hover:bg-rose-600 hover:text-white transition-all shadow-md">
+                    <X size={32} strokeWidth={3}/>
                 </button>
 
-                <header className="p-8 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-50 gap-4">
-                    <div>
-                        <b className="text-3xl font-black italic text-slate-800 uppercase tracking-tight">Fichas de EPI</b>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">Gestão de Entregas e Devoluções</p>
-                    </div>
-                    
-                    <div className="flex gap-4">
-                         <div className="flex bg-slate-200 p-1.5 rounded-2xl">
-                            <button onClick={() => setViewMode('USERS')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition-all flex items-center gap-2 ${viewMode === 'USERS' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}><Users size={16}/> Colaborador</button>
-                            <button onClick={() => setViewMode('TIMELINE')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition-all flex items-center gap-2 ${viewMode === 'TIMELINE' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}><CalendarClock size={16}/> Geral</button>
+                <div className="flex h-full">
+                    {/* SIDEBAR: LISTA DE COLABORADORES */}
+                    <aside className="w-72 bg-slate-50 border-r p-6 flex flex-col overflow-y-auto">
+                        <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-2">
+                            <Users size={16}/> Colaboradores
+                        </h2>
+                        <div className="space-y-2">
+                            {usersList.map(u => (
+                                <button 
+                                    key={u}
+                                    onClick={() => setSelectedUser(u)}
+                                    className={`w-full p-4 rounded-xl text-left font-black text-xs uppercase transition-all flex items-center justify-between ${selectedUser === u ? 'bg-indigo-600 text-white shadow-lg' : 'bg-white text-slate-500 hover:bg-slate-100 border border-slate-200'}`}
+                                >
+                                    {u}
+                                    {selectedUser === u && <CheckCircle2 size={16}/>}
+                                </button>
+                            ))}
                         </div>
-                    </div>
-                </header>
+                    </aside>
 
-                <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
-                    {loading ? <Loader2 className="animate-spin mx-auto mt-10 text-indigo-600 w-12 h-12"/> : (
-                        viewMode === 'TIMELINE' ? (
-                            <div className="space-y-3">
-                                {logs.map(l => (
-                                    <div key={l.id} className="p-5 bg-white rounded-2xl border border-slate-100 flex justify-between items-center shadow-sm">
-                                        <div>
-                                            <div className="font-black uppercase text-sm text-slate-800">{l.action} - {l.sku}</div>
-                                            <div className="text-slate-400 font-bold uppercase text-[10px] mt-1">{l.location} | {l.username} | {new Date(l.timestamp).toLocaleString()}</div>
-                                        </div>
-                                        <div className={`font-black text-xl ${l.action === 'ENTRADA' ? 'text-emerald-600' : 'text-rose-600'}`}>{l.action === 'ENTRADA' ? '+' : '-'}{l.quantity}</div>
+                    {/* MAIN: FICHA TÉCNICA VISUAL */}
+                    <main className="flex-1 flex flex-col bg-slate-100 overflow-hidden relative">
+                        {selectedUser ? (
+                            <>
+                                {/* HEADER DA FICHA */}
+                                <div className="bg-white p-8 border-b shadow-sm z-10 flex justify-between items-start">
+                                    <div>
+                                        <h1 className="text-2xl font-black text-slate-800 uppercase italic">Ficha Individual</h1>
+                                        <p className="text-xs font-bold text-slate-400 mt-1 uppercase tracking-wider">Colaborador: <span className="text-indigo-600">{selectedUser}</span></p>
                                     </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="space-y-6">
-                                <div className="flex justify-between items-center bg-white p-4 rounded-2xl border shadow-sm">
-                                    <h3 className="text-xs font-black uppercase text-slate-400 tracking-widest">Opções de Visualização</h3>
-                                    <div className="flex bg-slate-100 p-1 rounded-xl">
-                                        <button 
-                                            onClick={() => setShowConsolidated(false)}
-                                            className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 ${!showConsolidated ? 'bg-white shadow text-indigo-600' : 'text-slate-400'}`}
-                                        >
-                                            <ClipboardList size={12}/> Ficha Completa (Padrão)
-                                        </button>
-                                        <button 
-                                            onClick={() => setShowConsolidated(true)}
-                                            className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 ${showConsolidated ? 'bg-white shadow text-indigo-600' : 'text-slate-400'}`}
-                                        >
-                                            <Filter size={12}/> Apenas Itens em Posse
-                                        </button>
-                                    </div>
+                                    <button 
+                                        onClick={generatePDF}
+                                        className="bg-slate-800 text-white px-6 py-4 rounded-xl font-black text-xs uppercase flex items-center gap-3 hover:bg-slate-900 shadow-xl active:scale-95 transition-all"
+                                    >
+                                        <FileSignature size={20}/> Baixar Ficha Atualizada (PDF)
+                                    </button>
                                 </div>
 
-                                {userGroups.map(([username, userLogs]) => {
-                                    const visibleLogs = getDisplayedLogs(userLogs);
-                                    return (
-                                        <div key={username} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden">
-                                            <div className="p-6 bg-slate-800 border-b border-slate-700 flex justify-between items-center">
-                                                <div className="flex items-center gap-4">
-                                                    <div className="w-14 h-14 bg-indigo-500 rounded-2xl flex items-center justify-center text-white font-black text-xl uppercase shadow-lg border-2 border-slate-600">
-                                                        {username.substring(0,2)}
-                                                    </div>
-                                                    <div>
-                                                        <div className="font-black text-xl uppercase text-white">{username}</div>
-                                                        <div className="text-[10px] font-bold text-slate-300 uppercase tracking-wider mt-1">
-                                                            {userLogs.length} Registros na Ficha
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                
-                                                <button 
-                                                    onClick={() => generateUserPDF(username, userLogs)}
-                                                    className="flex items-center gap-2 px-6 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-lg active:scale-95"
-                                                >
-                                                    <FileText size={16}/> Baixar/Atualizar Ficha PDF
-                                                </button>
+                                {/* PAPEL DA FICHA (TABELA) */}
+                                <div className="flex-1 overflow-y-auto p-8">
+                                    <div className="bg-white rounded shadow-sm min-h-[500px] max-w-4xl mx-auto border border-slate-200 flex flex-col">
+                                        
+                                        {/* CABEÇALHO DO PAPEL */}
+                                        <div className="p-6 border-b-2 border-slate-100 flex flex-col items-center justify-center bg-slate-50/50">
+                                            <h2 className="text-lg font-black uppercase text-slate-700">Controle de Entrega de EPI / Materiais</h2>
+                                            <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Ordem Cronológica: Antigo (Topo) &rarr; Novo (Fundo)</p>
+                                        </div>
+
+                                        {/* TABELA REAL */}
+                                        <div className="flex-1">
+                                            <div className="grid grid-cols-12 bg-slate-100 p-3 text-[10px] font-black uppercase text-slate-500 border-b border-slate-200">
+                                                <div className="col-span-2">Data</div>
+                                                <div className="col-span-2">Tipo</div>
+                                                <div className="col-span-6">Item / Descrição</div>
+                                                <div className="col-span-1 text-center">Qtd</div>
+                                                <div className="col-span-1 text-center">Visto</div>
                                             </div>
                                             
-                                            {/* ÁREA DA FICHA TÉCNICA VISUAL */}
-                                            <div className="bg-white p-0">
-                                                {!showConsolidated && (
-                                                    <div className="bg-amber-50 px-6 py-3 text-[10px] font-bold text-amber-600 uppercase border-b border-amber-100 flex items-center justify-center gap-2">
-                                                        <ArrowDownLeft size={14}/> Ordem de Preenchimento: Itens novos são adicionados ao final da lista
+                                            {currentUserLogs.map((log, idx) => (
+                                                <div key={idx} className={`grid grid-cols-12 p-3 text-xs border-b border-slate-100 items-center hover:bg-yellow-50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}`}>
+                                                    <div className="col-span-2 text-slate-500 font-bold">
+                                                        {new Date(log.timestamp).toLocaleDateString()}
+                                                        <span className="block text-[9px] font-normal opacity-60">{new Date(log.timestamp).toLocaleTimeString().slice(0,5)}</span>
                                                     </div>
-                                                )}
-
-                                                {/* CABEÇALHO DA TABELA VISUAL */}
-                                                <div className="grid grid-cols-12 gap-2 px-6 py-3 bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                                                    <div className="col-span-2">Data</div>
-                                                    <div className="col-span-2">Ação</div>
-                                                    <div className="col-span-4">Item / EPI</div>
-                                                    <div className="col-span-2 text-center">Qtd</div>
-                                                    <div className="col-span-2 text-center">Visto</div>
+                                                    <div className="col-span-2">
+                                                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${log.action === 'ENTRADA' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                                            {log.action}
+                                                        </span>
+                                                    </div>
+                                                    <div className="col-span-6 font-bold text-slate-700 uppercase">
+                                                        {log.sku || log.details}
+                                                    </div>
+                                                    <div className="col-span-1 text-center font-black text-slate-800">
+                                                        {log.quantity}
+                                                    </div>
+                                                    <div className="col-span-1 flex justify-center opacity-30">
+                                                        <CheckSquare size={14}/>
+                                                    </div>
                                                 </div>
-
-                                                <div className="max-h-[300px] overflow-y-auto">
-                                                    {visibleLogs.map((l, idx) => (
-                                                        <div key={idx} className="grid grid-cols-12 gap-2 px-6 py-4 border-b border-slate-100 hover:bg-indigo-50 transition-colors items-center group text-xs">
-                                                            <div className="col-span-2 font-bold text-slate-500">
-                                                                {new Date(l.timestamp).toLocaleDateString()}
-                                                                <span className="block text-[9px] text-slate-400 font-normal">{new Date(l.timestamp).toLocaleTimeString().slice(0,5)}</span>
-                                                            </div>
-                                                            <div className="col-span-2">
-                                                                <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${l.action === 'ENTRADA' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                                                                    {l.action === 'ENTRADA' ? 'ENTRADA' : 'SAÍDA'}
-                                                                </span>
-                                                            </div>
-                                                            <div className="col-span-4 font-bold text-slate-700 uppercase truncate" title={l.sku || l.details}>
-                                                                {l.sku || 'ITEM GERAL'}
-                                                            </div>
-                                                            <div className="col-span-2 text-center font-black text-slate-800 text-sm">
-                                                                {l.quantity}
-                                                            </div>
-                                                            <div className="col-span-2 flex justify-center">
-                                                                <CheckSquare size={16} className="text-slate-300 group-hover:text-indigo-500 transition-colors"/>
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                    {visibleLogs.length === 0 && <div className="p-10 text-center text-slate-400 text-sm uppercase font-black opacity-50">Ficha em branco.</div>}
-                                                </div>
-                                            </div>
+                                            ))}
                                         </div>
-                                    );
-                                })}
+                                        
+                                        {/* RODAPÉ DO PAPEL */}
+                                        <div className="p-8 border-t border-slate-200 mt-auto">
+                                            <p className="text-[9px] text-slate-400 text-center uppercase">Este documento é gerado eletronicamente e possui validade para controle interno.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="flex-1 flex flex-col items-center justify-center text-slate-300">
+                                <FileText size={64} className="mb-4 opacity-50"/>
+                                <p className="font-black uppercase tracking-widest">Selecione um colaborador ao lado</p>
                             </div>
-                        )
-                    )}
+                        )}
+                    </main>
                 </div>
             </div>
         </div>
