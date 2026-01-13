@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Box, User, Lock,
   UserCheck, Search, Trash2, Layers, LogOut,
   TrendingUp, History, ArrowUpRight, ArrowDownLeft, Plus,
-  MousePointer2, Zap, AlertTriangle
+  MousePointer2, Zap, AlertTriangle, Users, Filter, CalendarClock
 } from 'lucide-react';
 import { PalletPosition, RackId, MasterProduct, AppUser, ActivityLog } from './types';
 import { 
@@ -209,22 +209,134 @@ const MasterProductModal = ({ masterProducts, onClose, onSave }) => {
 const HistoryModal = ({ isOpen, onClose }) => {
     const [logs, setLogs] = useState<ActivityLog[]>([]);
     const [loading, setLoading] = useState(true);
+    const [viewMode, setViewMode] = useState<'TIMELINE' | 'USERS'>('USERS');
+    const [consolidateItems, setConsolidateItems] = useState(true); // Padrão: Resumo Único
+
     useEffect(() => { if (isOpen) { setLoading(true); fetchLogsFromDB(FIXED_DB_STRING).then(d => { setLogs(d); setLoading(false); }); } }, [isOpen]);
+
+    // Lógica de agrupamento de usuários
+    const userGroups = useMemo(() => {
+        const groups: Record<string, ActivityLog[]> = {};
+        logs.forEach(log => {
+            if (!groups[log.username]) groups[log.username] = [];
+            groups[log.username].push(log);
+        });
+        
+        // Ordena usuários pela atividade mais recente
+        return Object.entries(groups).sort(([, aLogs], [, bLogs]) => {
+            const timeA = new Date(aLogs[0].timestamp).getTime();
+            const timeB = new Date(bLogs[0].timestamp).getTime();
+            return timeB - timeA;
+        });
+    }, [logs]);
+
+    const getConsolidatedUserLogs = (userLogs: ActivityLog[]) => {
+        if (!consolidateItems) return userLogs;
+        
+        // Mantém apenas o registro mais recente de cada SKU
+        const uniqueItems = new Map<string, ActivityLog>();
+        // Processa do mais antigo pro mais novo para sobrescrever
+        // Mas a lista vem do banco ordenada por mais recente.
+        // Então iteramos e pegamos o primeiro que aparece (que é o mais recente) e ignoramos os outros
+        
+        for (const log of userLogs) {
+            const key = log.sku || log.details; // Chave é o SKU
+            if (!uniqueItems.has(key)) {
+                uniqueItems.set(key, log);
+            }
+        }
+        return Array.from(uniqueItems.values());
+    };
+
     if (!isOpen) return null;
+
     return (
         <div className="fixed inset-0 bg-slate-900/90 z-[8000] flex justify-center pt-20 px-4 backdrop-blur-sm">
-            <div className="w-full max-w-4xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[80vh]">
-                <header className="p-6 border-b flex justify-between items-center bg-slate-50"><b>Histórico de Movimentações</b><button onClick={onClose}><X/></button></header>
-                <div className="flex-1 overflow-y-auto p-6 space-y-2">
-                    {loading ? <Loader2 className="animate-spin mx-auto mt-10 text-indigo-600"/> : logs.map(l => (
-                        <div key={l.id} className="p-4 bg-slate-50 rounded-xl border flex justify-between items-center">
-                            <div className="text-xs">
-                                <div className="font-black uppercase">{l.action} - {l.sku}</div>
-                                <div className="text-slate-400 font-bold uppercase">{l.location} | {l.username}</div>
+            <div className="w-full max-w-5xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col h-[85vh]">
+                <header className="p-8 border-b flex justify-between items-center bg-slate-50">
+                    <div>
+                        <b className="text-2xl font-black italic text-slate-800 uppercase tracking-tight">Atividades</b>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Monitoramento de Operações</p>
+                    </div>
+                    
+                    <div className="flex bg-slate-200 p-1 rounded-xl">
+                        <button onClick={() => setViewMode('USERS')} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 ${viewMode === 'USERS' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}><Users size={14}/> Por Colaborador</button>
+                        <button onClick={() => setViewMode('TIMELINE')} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 ${viewMode === 'TIMELINE' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}><CalendarClock size={14}/> Cronologia</button>
+                    </div>
+
+                    <button onClick={onClose} className="p-3 hover:bg-slate-200 rounded-full transition-colors"><X/></button>
+                </header>
+
+                <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
+                    {loading ? <Loader2 className="animate-spin mx-auto mt-10 text-indigo-600"/> : (
+                        viewMode === 'TIMELINE' ? (
+                            <div className="space-y-3">
+                                {logs.map(l => (
+                                    <div key={l.id} className="p-5 bg-white rounded-2xl border border-slate-100 flex justify-between items-center shadow-sm">
+                                        <div>
+                                            <div className="font-black uppercase text-sm text-slate-800">{l.action} - {l.sku}</div>
+                                            <div className="text-slate-400 font-bold uppercase text-[10px] mt-1">{l.location} | {l.username} | {new Date(l.timestamp).toLocaleString()}</div>
+                                        </div>
+                                        <div className={`font-black text-xl ${l.action === 'ENTRADA' ? 'text-emerald-600' : 'text-rose-600'}`}>{l.action === 'ENTRADA' ? '+' : '-'}{l.quantity}</div>
+                                    </div>
+                                ))}
                             </div>
-                            <div className={`font-black text-lg ${l.action === 'ENTRADA' ? 'text-emerald-600' : 'text-rose-600'}`}>{l.action === 'ENTRADA' ? '+' : '-'}{l.quantity}</div>
-                        </div>
-                    ))}
+                        ) : (
+                            <div className="space-y-8">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h3 className="text-xs font-black uppercase text-slate-400 tracking-widest">Colaboradores Ativos</h3>
+                                    <button 
+                                        onClick={() => setConsolidateItems(!consolidateItems)}
+                                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-[10px] font-black uppercase transition-all border ${consolidateItems ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-white text-slate-400 border-slate-200'}`}
+                                    >
+                                        <Filter size={12}/>
+                                        {consolidateItems ? 'Modo Resumo Único (Ativado)' : 'Mostrar Histórico Completo'}
+                                    </button>
+                                </div>
+                                
+                                {userGroups.map(([username, userLogs]) => {
+                                    const visibleLogs = getConsolidatedUserLogs(userLogs);
+                                    return (
+                                        <div key={username} className="bg-white rounded-[2rem] border shadow-sm overflow-hidden">
+                                            <div className="p-6 bg-slate-50/80 border-b flex justify-between items-center">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white font-black text-lg uppercase shadow-lg">
+                                                        {username.substring(0,2)}
+                                                    </div>
+                                                    <div>
+                                                        <div className="font-black text-lg uppercase text-slate-800">{username}</div>
+                                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{visibleLogs.length} itens listados</div>
+                                                    </div>
+                                                </div>
+                                                <div className="text-[10px] font-bold text-slate-400 uppercase bg-white px-3 py-1 rounded-lg border">
+                                                    Última ação: {new Date(userLogs[0].timestamp).toLocaleTimeString()}
+                                                </div>
+                                            </div>
+                                            <div className="p-4 space-y-2">
+                                                {visibleLogs.map((l, idx) => (
+                                                    <div key={idx} className="p-4 rounded-xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/30 transition-all flex items-center justify-between group">
+                                                        <div className="flex items-center gap-4">
+                                                            <div className={`w-2 h-12 rounded-full ${l.action === 'ENTRADA' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                                                            <div>
+                                                                <div className="font-black text-sm uppercase text-slate-700">{l.sku || 'ITEM SEM SKU'}</div>
+                                                                <div className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">
+                                                                    {l.location} • {new Date(l.timestamp).toLocaleDateString()} às {new Date(l.timestamp).toLocaleTimeString()}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div className={`px-4 py-2 rounded-lg font-black text-sm ${l.action === 'ENTRADA' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                                            {l.action === 'ENTRADA' ? 'ENTROU' : 'SAIU'} {l.quantity} UN
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                                {visibleLogs.length === 0 && <div className="p-4 text-center text-slate-400 text-xs uppercase font-bold">Nenhuma atividade recente.</div>}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )
+                    )}
                 </div>
             </div>
         </div>
