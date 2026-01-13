@@ -7,8 +7,9 @@ import {
   LayoutDashboard, Box, User, Lock,
   UserCheck, Search, Trash2, Layers, LogOut,
   TrendingUp, History, ArrowUpRight, ArrowDownLeft, Plus,
-  MousePointer2, Zap, AlertTriangle, Users, Filter, CalendarClock
+  MousePointer2, Zap, AlertTriangle, Users, Filter, CalendarClock, XCircle, FileText
 } from 'lucide-react';
+import { jsPDF } from "jspdf";
 import { PalletPosition, RackId, MasterProduct, AppUser, ActivityLog } from './types';
 import { 
   initializeDatabase, 
@@ -160,10 +161,10 @@ const SearchStockModal = ({ isOpen, onClose, inventory }) => {
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-slate-900/90 z-[8000] flex justify-center pt-20 px-4 backdrop-blur-sm">
-            <div className="w-full max-w-3xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[80vh]">
+            <div className="w-full max-w-3xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[80vh] relative animate-in zoom-in-95 duration-200">
+                <button onClick={onClose} className="absolute top-4 right-4 z-50 p-2 bg-rose-100 text-rose-600 rounded-full hover:bg-rose-600 hover:text-white transition-all shadow-md"><X size={32}/></button>
                 <div className="p-6 border-b bg-slate-50 flex gap-4 items-center">
                     <Search className="text-slate-400"/><input autoFocus placeholder="Buscar produto..." className="flex-1 bg-transparent text-lg font-black uppercase outline-none" value={query} onChange={e => setQuery(e.target.value)} />
-                    <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full"><X/></button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                     {results.map((res: any) => (
@@ -190,8 +191,9 @@ const MasterProductModal = ({ masterProducts, onClose, onSave }) => {
     };
     return (
         <div className="fixed inset-0 bg-slate-900/90 z-[8000] flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-2xl rounded-3xl overflow-hidden flex flex-col h-[70vh]">
-                <header className="p-6 border-b flex justify-between items-center"><h2 className="font-black uppercase text-indigo-600 italic">Produtos Mestre</h2><button onClick={onClose}><X/></button></header>
+            <div className="bg-white w-full max-w-2xl rounded-3xl overflow-hidden flex flex-col h-[70vh] relative animate-in zoom-in-95 duration-200">
+                <button onClick={onClose} className="absolute top-4 right-4 z-50 p-2 bg-rose-100 text-rose-600 rounded-full hover:bg-rose-600 hover:text-white transition-all shadow-md"><X size={32}/></button>
+                <header className="p-6 border-b flex justify-between items-center"><h2 className="font-black uppercase text-indigo-600 italic">Produtos Mestre</h2></header>
                 <form onSubmit={handleSubmit} className="p-6 bg-slate-50 grid grid-cols-12 gap-3">
                     <input className="col-span-3 p-3 border rounded-xl font-bold" placeholder="SKU" value={formData.productId} onChange={e => setFormData({...formData, productId: e.target.value})} required />
                     <input className="col-span-6 p-3 border rounded-xl font-bold" placeholder="NOME" value={formData.productName} onChange={e => setFormData({...formData, productName: e.target.value})} required />
@@ -210,7 +212,10 @@ const HistoryModal = ({ isOpen, onClose }) => {
     const [logs, setLogs] = useState<ActivityLog[]>([]);
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<'TIMELINE' | 'USERS'>('USERS');
-    const [consolidateItems, setConsolidateItems] = useState(true); // Padrão: Resumo Único
+    
+    // FALSE = Mostra histórico completo cronológico (ficha)
+    // TRUE = Mostra resumo (última interação)
+    const [showConsolidated, setShowConsolidated] = useState(true); 
 
     useEffect(() => { if (isOpen) { setLoading(true); fetchLogsFromDB(FIXED_DB_STRING).then(d => { setLogs(d); setLoading(false); }); } }, [isOpen]);
 
@@ -222,7 +227,6 @@ const HistoryModal = ({ isOpen, onClose }) => {
             groups[log.username].push(log);
         });
         
-        // Ordena usuários pela atividade mais recente
         return Object.entries(groups).sort(([, aLogs], [, bLogs]) => {
             const timeA = new Date(aLogs[0].timestamp).getTime();
             const timeB = new Date(bLogs[0].timestamp).getTime();
@@ -230,45 +234,118 @@ const HistoryModal = ({ isOpen, onClose }) => {
         });
     }, [logs]);
 
-    const getConsolidatedUserLogs = (userLogs: ActivityLog[]) => {
-        if (!consolidateItems) return userLogs;
-        
-        // Mantém apenas o registro mais recente de cada SKU
-        const uniqueItems = new Map<string, ActivityLog>();
-        // Processa do mais antigo pro mais novo para sobrescrever
-        // Mas a lista vem do banco ordenada por mais recente.
-        // Então iteramos e pegamos o primeiro que aparece (que é o mais recente) e ignoramos os outros
-        
-        for (const log of userLogs) {
-            const key = log.sku || log.details; // Chave é o SKU
-            if (!uniqueItems.has(key)) {
-                uniqueItems.set(key, log);
+    const getDisplayedLogs = (userLogs: ActivityLog[]) => {
+        if (showConsolidated) {
+            // Modo Resumo: Deduplica por SKU, mantendo o mais recente (topo)
+            const uniqueItems = new Map<string, ActivityLog>();
+            for (const log of userLogs) {
+                const key = log.sku || log.details; 
+                if (!uniqueItems.has(key)) {
+                    uniqueItems.set(key, log);
+                }
             }
+            return Array.from(uniqueItems.values());
+        } else {
+            // Modo Ficha: Mostra TUDO, mas inverte a ordem (Antigo no topo -> Novo em baixo)
+            // userLogs vem do DB como DESC (novo -> antigo). Precisamos inverter.
+            return [...userLogs].reverse();
         }
-        return Array.from(uniqueItems.values());
+    };
+
+    const generateUserPDF = (username: string, userLogs: ActivityLog[]) => {
+        // Para o PDF, sempre usamos o histórico completo em ordem cronológica (Antigo -> Novo)
+        const chronologicalLogs = [...userLogs].reverse();
+        
+        const doc = new jsPDF();
+        
+        // Header
+        doc.setFillColor(79, 70, 229); // Indigo 600
+        doc.rect(0, 0, 210, 30, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(22);
+        doc.setFont("helvetica", "bold");
+        doc.text("FICHA DE MOVIMENTAÇÃO / EPI", 105, 15, { align: "center" });
+        doc.setFontSize(10);
+        doc.text("Histórico Completo e Atualizado", 105, 22, { align: "center" });
+
+        // User Info
+        doc.setTextColor(30, 41, 59); // Slate 800
+        doc.setFontSize(12);
+        doc.text(`COLABORADOR: ${username.toUpperCase()}`, 14, 45);
+        doc.text(`DATA EMISSÃO: ${new Date().toLocaleDateString()} às ${new Date().toLocaleTimeString()}`, 14, 52);
+        
+        // Table Header
+        let y = 65;
+        doc.setFillColor(241, 245, 249); // Slate 100
+        doc.rect(14, y-6, 182, 8, 'F');
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.text("DATA/HORA", 16, y);
+        doc.text("AÇÃO", 50, y);
+        doc.text("ITEM / SKU", 80, y);
+        doc.text("QTD", 160, y);
+        doc.text("LOCAL", 180, y);
+        
+        y += 10;
+
+        // Table Rows
+        doc.setFont("helvetica", "normal");
+        chronologicalLogs.forEach((log) => {
+            if (y > 270) {
+                doc.addPage();
+                y = 20;
+            }
+
+            const dateStr = new Date(log.timestamp).toLocaleDateString() + ' ' + new Date(log.timestamp).toLocaleTimeString().slice(0,5);
+            const isEntry = log.action === 'ENTRADA';
+            
+            doc.setTextColor(isEntry ? 22 : 220, isEntry ? 163 : 38, isEntry ? 74 : 38); // Green or Red
+            doc.text(dateStr, 16, y);
+            doc.text(log.action.substring(0, 15), 50, y);
+            
+            doc.setTextColor(30, 41, 59); // Reset
+            const itemText = log.sku ? `${log.sku}` : log.details.substring(0, 35);
+            doc.text(itemText, 80, y);
+            doc.text(log.quantity?.toString() || '1', 160, y);
+            doc.text(log.location || '-', 180, y);
+            
+            // Linha divisória fina
+            doc.setDrawColor(226, 232, 240);
+            doc.line(14, y+2, 196, y+2);
+
+            y += 8;
+        });
+
+        doc.save(`Ficha_EPI_${username.replace(/\s+/g, '_')}.pdf`);
     };
 
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 bg-slate-900/90 z-[8000] flex justify-center pt-20 px-4 backdrop-blur-sm">
-            <div className="w-full max-w-5xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col h-[85vh]">
-                <header className="p-8 border-b flex justify-between items-center bg-slate-50">
+        <div className="fixed inset-0 bg-slate-900/90 z-[8000] flex justify-center pt-10 px-4 backdrop-blur-md">
+            <div className="w-full max-w-5xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col h-[90vh] relative animate-in slide-in-from-bottom-10">
+                
+                {/* BOTÃO FECHAR GRANDE ESTILO PDF */}
+                <button onClick={onClose} className="absolute top-6 right-6 z-50 p-2 bg-rose-100 text-rose-600 rounded-full hover:bg-rose-600 hover:text-white transition-all shadow-md group">
+                    <X size={32} className="group-hover:scale-110 transition-transform"/>
+                </button>
+
+                <header className="p-8 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-50 gap-4">
                     <div>
-                        <b className="text-2xl font-black italic text-slate-800 uppercase tracking-tight">Atividades</b>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Monitoramento de Operações</p>
+                        <b className="text-3xl font-black italic text-slate-800 uppercase tracking-tight">Atividades</b>
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">Gestão de Colaboradores</p>
                     </div>
                     
-                    <div className="flex bg-slate-200 p-1 rounded-xl">
-                        <button onClick={() => setViewMode('USERS')} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 ${viewMode === 'USERS' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}><Users size={14}/> Por Colaborador</button>
-                        <button onClick={() => setViewMode('TIMELINE')} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 ${viewMode === 'TIMELINE' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}><CalendarClock size={14}/> Cronologia</button>
+                    <div className="flex gap-4">
+                         <div className="flex bg-slate-200 p-1.5 rounded-2xl">
+                            <button onClick={() => setViewMode('USERS')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition-all flex items-center gap-2 ${viewMode === 'USERS' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}><Users size={16}/> Colaborador</button>
+                            <button onClick={() => setViewMode('TIMELINE')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition-all flex items-center gap-2 ${viewMode === 'TIMELINE' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}><CalendarClock size={16}/> Geral</button>
+                        </div>
                     </div>
-
-                    <button onClick={onClose} className="p-3 hover:bg-slate-200 rounded-full transition-colors"><X/></button>
                 </header>
 
                 <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
-                    {loading ? <Loader2 className="animate-spin mx-auto mt-10 text-indigo-600"/> : (
+                    {loading ? <Loader2 className="animate-spin mx-auto mt-10 text-indigo-600 w-12 h-12"/> : (
                         viewMode === 'TIMELINE' ? (
                             <div className="space-y-3">
                                 {logs.map(l => (
@@ -282,54 +359,76 @@ const HistoryModal = ({ isOpen, onClose }) => {
                                 ))}
                             </div>
                         ) : (
-                            <div className="space-y-8">
-                                <div className="flex items-center justify-between mb-4">
-                                    <h3 className="text-xs font-black uppercase text-slate-400 tracking-widest">Colaboradores Ativos</h3>
-                                    <button 
-                                        onClick={() => setConsolidateItems(!consolidateItems)}
-                                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-[10px] font-black uppercase transition-all border ${consolidateItems ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-white text-slate-400 border-slate-200'}`}
-                                    >
-                                        <Filter size={12}/>
-                                        {consolidateItems ? 'Modo Resumo Único (Ativado)' : 'Mostrar Histórico Completo'}
-                                    </button>
+                            <div className="space-y-6">
+                                <div className="flex justify-between items-center bg-white p-4 rounded-2xl border shadow-sm">
+                                    <h3 className="text-xs font-black uppercase text-slate-400 tracking-widest">Modo de Visualização</h3>
+                                    <div className="flex bg-slate-100 p-1 rounded-xl">
+                                        <button 
+                                            onClick={() => setShowConsolidated(true)}
+                                            className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 ${showConsolidated ? 'bg-white shadow text-indigo-600' : 'text-slate-400'}`}
+                                        >
+                                            <Filter size={12}/> Resumo (Status Atual)
+                                        </button>
+                                        <button 
+                                            onClick={() => setShowConsolidated(false)}
+                                            className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 ${!showConsolidated ? 'bg-white shadow text-indigo-600' : 'text-slate-400'}`}
+                                        >
+                                            <ClipboardList size={12}/> Ficha Completa (Cronológica)
+                                        </button>
+                                    </div>
                                 </div>
-                                
+
                                 {userGroups.map(([username, userLogs]) => {
-                                    const visibleLogs = getConsolidatedUserLogs(userLogs);
+                                    const visibleLogs = getDisplayedLogs(userLogs);
                                     return (
-                                        <div key={username} className="bg-white rounded-[2rem] border shadow-sm overflow-hidden">
-                                            <div className="p-6 bg-slate-50/80 border-b flex justify-between items-center">
+                                        <div key={username} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden">
+                                            <div className="p-6 bg-indigo-50/50 border-b flex justify-between items-center">
                                                 <div className="flex items-center gap-4">
-                                                    <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white font-black text-lg uppercase shadow-lg">
+                                                    <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center text-white font-black text-xl uppercase shadow-lg">
                                                         {username.substring(0,2)}
                                                     </div>
                                                     <div>
-                                                        <div className="font-black text-lg uppercase text-slate-800">{username}</div>
-                                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{visibleLogs.length} itens listados</div>
+                                                        <div className="font-black text-xl uppercase text-slate-800">{username}</div>
+                                                        <div className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider bg-indigo-100 px-3 py-1 rounded-full w-fit mt-1">
+                                                            {visibleLogs.length} registros listados
+                                                        </div>
                                                     </div>
                                                 </div>
-                                                <div className="text-[10px] font-bold text-slate-400 uppercase bg-white px-3 py-1 rounded-lg border">
-                                                    Última ação: {new Date(userLogs[0].timestamp).toLocaleTimeString()}
-                                                </div>
+                                                
+                                                <button 
+                                                    onClick={() => generateUserPDF(username, userLogs)}
+                                                    className="flex items-center gap-2 px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-lg active:scale-95"
+                                                >
+                                                    <FileText size={16}/> Baixar Ficha PDF
+                                                </button>
                                             </div>
-                                            <div className="p-4 space-y-2">
+                                            <div className="p-2 bg-slate-50/30">
+                                                {/* Se estiver no modo Ficha Completa, avisar sobre a ordem */}
+                                                {!showConsolidated && (
+                                                    <div className="px-4 py-2 text-[10px] font-bold text-slate-400 uppercase text-center border-b border-dashed mb-2">
+                                                        ↓ Ordem Cronológica: Do Mais Antigo para o Mais Novo ↓
+                                                    </div>
+                                                )}
+
                                                 {visibleLogs.map((l, idx) => (
-                                                    <div key={idx} className="p-4 rounded-xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/30 transition-all flex items-center justify-between group">
+                                                    <div key={idx} className="p-4 m-2 rounded-2xl border border-slate-100 hover:border-indigo-300 hover:bg-white hover:shadow-md transition-all flex items-center justify-between group bg-white/60">
                                                         <div className="flex items-center gap-4">
                                                             <div className={`w-2 h-12 rounded-full ${l.action === 'ENTRADA' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
                                                             <div>
-                                                                <div className="font-black text-sm uppercase text-slate-700">{l.sku || 'ITEM SEM SKU'}</div>
-                                                                <div className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">
-                                                                    {l.location} • {new Date(l.timestamp).toLocaleDateString()} às {new Date(l.timestamp).toLocaleTimeString()}
+                                                                <div className="font-black text-base uppercase text-slate-700">{l.sku || 'ITEM SEM SKU'}</div>
+                                                                <div className="text-[10px] font-bold text-slate-400 uppercase mt-1 flex items-center gap-2">
+                                                                    <span className="bg-slate-100 px-2 py-0.5 rounded border">{l.location}</span>
+                                                                    <span>{new Date(l.timestamp).toLocaleDateString()} às {new Date(l.timestamp).toLocaleTimeString()}</span>
                                                                 </div>
                                                             </div>
                                                         </div>
-                                                        <div className={`px-4 py-2 rounded-lg font-black text-sm ${l.action === 'ENTRADA' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                                                            {l.action === 'ENTRADA' ? 'ENTROU' : 'SAIU'} {l.quantity} UN
+                                                        <div className={`px-5 py-3 rounded-xl font-black text-sm flex flex-col items-end min-w-[100px] ${l.action === 'ENTRADA' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                                                            <span>{l.action === 'ENTRADA' ? 'ENTROU' : 'SAIU'}</span>
+                                                            <span className="text-lg">{l.quantity} UN</span>
                                                         </div>
                                                     </div>
                                                 ))}
-                                                {visibleLogs.length === 0 && <div className="p-4 text-center text-slate-400 text-xs uppercase font-bold">Nenhuma atividade recente.</div>}
+                                                {visibleLogs.length === 0 && <div className="p-10 text-center text-slate-400 text-sm uppercase font-black opacity-50">Nenhuma atividade registrada.</div>}
                                             </div>
                                         </div>
                                     );
@@ -377,13 +476,13 @@ const OperationModal = ({ isOpen, context, inventory, masterProducts, currentUse
 
     return (
         <div className="fixed inset-0 bg-slate-900/90 z-[9000] flex items-center justify-center p-4 backdrop-blur-md">
-            <div className="bg-white w-full max-w-md rounded-[2.5rem] overflow-hidden shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="bg-white w-full max-w-md rounded-[2.5rem] overflow-hidden shadow-2xl max-h-[90vh] flex flex-col relative animate-in zoom-in-95 duration-200">
+                <button onClick={onClose} className="absolute top-6 right-6 z-50 p-2 bg-white/20 hover:bg-white/40 text-white rounded-full transition-all"><X size={24}/></button>
                 <header className={`p-8 text-white flex justify-between items-start ${itemsInPos.length > 0 ? 'bg-red-600' : (isExtension ? 'bg-red-800' : 'bg-emerald-600')}`}>
                     <div>
                         <h2 className="text-2xl font-black italic uppercase tracking-tighter">{getLabelForPosition(context.rack, context.level, context.pos)}</h2>
                         <p className="text-[10px] font-black uppercase opacity-80 mt-1">{itemsInPos.length > 0 ? `${itemsInPos.length} item(s) presentes` : 'Vaga Disponível'}</p>
                     </div>
-                    <button onClick={onClose} className="p-2 bg-white/20 hover:bg-white/30 rounded-xl"><X/></button>
                 </header>
 
                 <div className="p-8 space-y-6 overflow-y-auto">
